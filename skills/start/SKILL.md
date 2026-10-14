@@ -15,9 +15,10 @@ If the args are exactly `tick`, do only the **pass** below (no setup, no browser
 
 1. Run `python -m devtime setup check` (JSON; the first scan can take a minute). If `pythonOk` is false, say Python
    3.11+ is needed and stop.
-2. If `claudeMd.block` is false: ask the weekly cap with AskUserQuestion (percent of the weekly all-models limit at
-   which sessions stop starting agents; 85 % recommended, then 90 %, 75 %). Run
-   `python -m devtime setup claude-md --cap N --dry-run`, show the diff and, on yes, run it without `--dry-run`.
+2. If `claudeMd.block` is false: run `python -m devtime setup claude-md --cap 85 --dry-run` and show the diff. The
+   cap is a safety stop, not the plan's limit (which get_usage already reports): at 85 % of the weekly limit sessions
+   stop starting new agents. Say it can be changed later by re-running with another `--cap`. On yes, run it without
+   `--dry-run`. Don't ask for a number unless the user wants a different one.
 3. If `settings.duplicateHooks` is not empty (hook entries in settings.json that repeat the plugin's own), show them
    (event, command) and offer to remove them. Only on yes: copy settings.json to settings.json.bak, remove exactly
    those entries (and any group or event left empty), keep everything else, check it still parses. If

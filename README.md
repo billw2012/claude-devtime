@@ -41,9 +41,9 @@ Or ask Claude Code to do it: open a session in a clone of this repo and say "set
 
 ## Skills
 
-**`/devtime:start`** sets everything up the first time and keeps it running. It checks Python, asks for a weekly usage cap
-(85 % suggested) and, with your confirmation, adds a marked block to `~/.claude/CLAUDE.md` that asks sessions to read
-`get_usage` before launching agent stages and to stop at the cap. It offers to remove duplicate hook entries, starts the
+**`/devtime:start`** sets everything up the first time and keeps it running. It checks Python and, with your confirmation, adds a
+marked block to `~/.claude/CLAUDE.md` that asks sessions to read `get_usage` before launching agent stages and to stop
+starting new ones at 85 % of the weekly limit (a safety margin; change it with `setup claude-md --cap N`). It offers to remove duplicate hook entries, starts the
 dashboard and opens it, then runs a 30-minute loop in the session: record a plan reading, label new work for the
 weekly work lane, and every two hours let a small reviewer agent flag sessions that waste money. Keep that session
 open; a cheap model is fine for it.

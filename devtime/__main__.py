@@ -89,6 +89,7 @@ def main(argv=None):
     ssub.add_parser("check")
     q = ssub.add_parser("claude-md")
     q.add_argument("--cap", type=float, required=True, help="weekly cap, percent of the all-models limit")
+    q.add_argument("--five-hour-cap", type=float, help="5-hour cap, percent of the 5-hour limit (omit for none)")
     q.add_argument("--dry-run", action="store_true")
     ssub.add_parser("open")
     p = sub.add_parser("analyze")

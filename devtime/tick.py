@@ -70,9 +70,9 @@ def tick():
     url, up = setup.ensure_server()
     out = {"url": url}
     numbers = tick_numbers(url, up, now)
-    block, cap = setup.claude_md_status()
+    block, cap, five = setup.claude_md_status()
     out.update(reading=numbers.get("reading"), labels=numbers.get("labels", 0), review=review_state(now),
-               alerts=numbers.get("alerts", 0), cap=cap, setup=block)
+               alerts=numbers.get("alerts", 0), cap=cap, fiveHourCap=five, setup=block)
     if not up:
         out["server"] = "not answering"
     print(json.dumps(out, separators=(",", ":")))

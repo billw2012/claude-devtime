@@ -113,5 +113,17 @@ class Check(Base):
         self.assertEqual(json.loads(out.getvalue())["settings"]["path"], path)
 
 
+
+class FiveHourCap(unittest.TestCase):
+    def test_block_carries_both_caps(self):
+        from devtime import setup
+        text, _ = setup.new_claude_md(None, 85, 95)
+        self.assertIn("at 85 % of the weekly", text)
+        self.assertIn("at 95 % of the 5-hour", text)
+        self.assertEqual(setup.block_caps(text), (85.0, 95.0))
+        text, _ = setup.new_claude_md(text, 90)
+        self.assertEqual(setup.block_caps(text), (90.0, None))
+
+
 if __name__ == "__main__":
     unittest.main()

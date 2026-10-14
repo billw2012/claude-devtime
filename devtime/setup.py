@@ -23,13 +23,14 @@ START = "<!-- devtime:start -->"
 END = "<!-- devtime:end -->"
 BLOCK_RE = re.compile(re.escape(START) + r".*?" + re.escape(END), re.S)
 CAP_RE = re.compile(r"\bat\s+(\d+(?:\.\d+)?)\s*%\s+of the weekly")
+FIVE_RE = re.compile(r"\bat\s+(\d+(?:\.\d+)?)\s*%\s+of the 5-hour")
 HOOK_SCRIPTS = ("agent_budget.py", "ensure_server.py")
 
 BLOCK = """{start}
 ## Usage tracking (devtime)
 - On long or autonomous runs, call `mcp__ccd_session_mgmt__get_usage` before launching each agent stage (it records the plan's 5-hour and weekly usage for the devtime dashboard; there is no other source).
 - Weekly cap: at {cap} % of the weekly all-models limit start no new agents or stages; let running ones reach a safe point, commit, stop and tell the user what was left undone. Only the user raises the cap.
-- Name subagents with a short description of the piece of work (it labels work sections on the dashboard).
+{five}- Name subagents with a short description of the piece of work (it labels work sections on the dashboard).
 {end}"""
 
 
@@ -49,8 +50,20 @@ def fmt_cap(cap):
     return "%g" % float(cap)
 
 
-def make_block(cap, eol="\n"):
-    return BLOCK.format(start=START, end=END, cap=fmt_cap(cap)).replace("\n", eol)
+FIVE_LINE = ("- 5-hour cap: at {five} % of the 5-hour limit start no new agents or stages; let running ones reach a safe "
+             "point, then wait until the window's `resetsAt` (schedule a wakeup just after it), re-check usage and "
+             "continue.\n")
+
+
+def make_block(cap, eol="\n", five=None):
+    line = FIVE_LINE.format(five=fmt_cap(five)) if five is not None else ""
+    return BLOCK.format(start=START, end=END, cap=fmt_cap(cap), five=line).replace("\n", eol)
+
+
+def block_caps(block):
+    """(weekly cap, 5-hour cap) found in a devtime block's text, None where absent."""
+    found = [r.search(block or "") for r in (CAP_RE, FIVE_RE)]
+    return tuple(float(m.group(1)) if m else None for m in found)
 
 
 def read_text(path):
@@ -93,15 +106,15 @@ def remove_block(text, block_re):
     return head + tail, True
 
 
-def new_claude_md(text, cap):
+def new_claude_md(text, cap, five=None):
     """Returns (new text, action) with the devtime block inserted or replaced; everything else is kept as is."""
-    return upsert_block(text, BLOCK_RE, lambda eol: make_block(cap, eol))
+    return upsert_block(text, BLOCK_RE, lambda eol: make_block(cap, eol, five))
 
 
-def claude_md_cmd(cap, dry_run=False):
+def claude_md_cmd(cap, dry_run=False, five=None):
     path = claude_md_path()
     old = read_text(path)
-    new, action = new_claude_md(old, cap)
+    new, action = new_claude_md(old, cap, five)
     if dry_run:
         diff = "".join(difflib.unified_diff((old or "").splitlines(True), new.splitlines(True),
                                             "a/CLAUDE.md" if old is not None else "/dev/null", "b/CLAUDE.md"))
@@ -164,7 +177,7 @@ def check(projects=True):
     number = hooks.port()
     text = read_text(claude_md_path())
     m = BLOCK_RE.search(text) if text else None
-    cap = CAP_RE.search(m.group(0)) if m else None
+    cap, five = block_caps(m.group(0) if m else None)
     settings, settings_error = {}, None
     raw = read_text(settings_path())
     if raw is not None:
@@ -178,7 +191,7 @@ def check(projects=True):
         "server": {"url": "http://%s:%d/" % (hooks.HOST, number), "answering": hooks.answering(number)},
         "claudeDir": claude_dir(),
         "claudeMd": {"path": claude_md_path(), "exists": text is not None, "block": m is not None,
-                     "cap": float(cap.group(1)) if cap else None},
+                     "cap": cap, "fiveHourCap": five},
         "settings": {"path": settings_path(), "exists": raw is not None, "error": settings_error,
                      "duplicateHooks": find_hook_duplicates(settings),
                      "autoCompactWindow": env.get("CLAUDE_CODE_AUTO_COMPACT_WINDOW")},
@@ -208,11 +221,10 @@ def ensure_server(wait_s=60):
 
 
 def claude_md_status():
-    """(block exists, cap or None) for <claude dir>/CLAUDE.md."""
+    """(block exists, weekly cap or None, 5-hour cap or None) for <claude dir>/CLAUDE.md."""
     text = read_text(claude_md_path())
     m = BLOCK_RE.search(text) if text else None
-    cap = CAP_RE.search(m.group(0)) if m else None
-    return m is not None, float(cap.group(1)) if cap else None
+    return (m is not None,) + block_caps(m.group(0) if m else None)
 
 
 def open_cmd(wait_s=60):
@@ -230,6 +242,6 @@ def main(args):
     if args.setup_cmd == "check":
         check()
     elif args.setup_cmd == "claude-md":
-        claude_md_cmd(args.cap, args.dry_run)
+        claude_md_cmd(args.cap, args.dry_run, getattr(args, "five_hour_cap", None))
     elif args.setup_cmd == "open":
         return open_cmd()

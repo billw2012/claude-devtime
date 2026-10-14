@@ -44,7 +44,7 @@ class Tick(Base):
         with mock.patch.object(tick.setup, "ensure_server", return_value=("http://127.0.0.1:1/", False)), \
                 mock.patch.object(tick, "tick_numbers", return_value=self.numbers):
             out = json.loads(self.capture(tick.tick))
-        self.assertEqual(set(out), {"url", "reading", "labels", "review", "alerts", "cap", "setup", "server"})
+        self.assertEqual(set(out), {"url", "reading", "labels", "review", "alerts", "cap", "fiveHourCap", "setup", "server"})
         self.assertEqual(out["reading"]["weekly"], 41.0)
         self.assertEqual(out["labels"], 3)
         self.assertEqual(out["review"], {"due": True, "lastAt": None})

@@ -1,0 +1,274 @@
+# devtime reference
+
+Technical reference for the devtime plugin: commands, what is measured, configuration, rules and alerts. For what it
+is and how to install it, see the [README](../README.md).
+
+Commands (from a checkout, or `python <plugin dir>/devtime/...` via `python -m devtime`):
+
+    python -m devtime serve          # http://127.0.0.1:8765, rescans every 10 s, page refreshes itself
+    python -m devtime report --project MyProject [--since 2026-10-07] [--top 15]
+    python -m devtime projects       # every project found, with totals
+    python -m devtime json out.json --project MyProject
+    python -m devtime findings --latest   # the last Unreal run: phases, slowest steps, what wastes time
+
+## Plugin contents
+
+The plugin registers its hooks (`hooks/hooks.json`: the SessionStart hook starts the dashboard server on
+http://127.0.0.1:8765 if it is not running; `agent_budget.py` guards subagents and delivers usage alerts) and the slim
+`coder`, `reader` and `runner` agents plus the `labeller` and `reviewer` agents. Nothing runtime-generated lives in the plugin: caches, alerts, plan samples,
+the server log and archived Unreal logs go to `~/.claude/devtime/` (`cache/`, `logs/`), your settings and project
+profiles to `~/.claude/devtime/config/`. Set `DEVTIME_HOME` to use another folder. No account or token is needed; everything
+is read from the local transcripts.
+
+### Start and keep it updated: `/devtime:start`
+
+Run `/devtime:start` in Claude Code after installing. The first time it
+
+- checks Python, asks for a weekly usage cap (85 % suggested) and adds a short "Usage tracking (devtime)" block to
+  `~/.claude/CLAUDE.md` (between `<!-- devtime:start -->` and `<!-- devtime:end -->`; the rest of the file is untouched,
+  re-running replaces the block). The block asks sessions to call `get_usage` before launching agent stages, which is
+  where the dashboard's plan readings come from, and to stop starting agents at the cap;
+- offers to remove duplicate hook entries from `settings.json` (e.g. from an earlier manual install; a `.bak` is kept);
+- starts the dashboard server and opens it in the browser;
+- does a catch-up pass, then starts `/loop 30m /devtime:start tick` in the session.
+
+The loop lives in the session (keep it open; a cheap model such as Sonnet or Haiku is fine for it). Each pass adds
+very little context: one `get_usage` call (records the plan reading via the transcript), one
+`python -m devtime tick` call (server check plus a compact JSON: reading, unlabelled work items, whether a review is
+due, active alerts, cap), and, only when there is something to judge, a small Haiku subagent:
+
+- `devtime:labeller` names a work section for each unlabelled agent / session (`work-items` -> `work-assign -`), which
+  drives the dashboard's weekly work lane;
+- `devtime:reviewer` (every 2 h) reads `python -m devtime review-context` (the `/api/watch` summary plus the tail of
+  `review-log.md`), leaves at most 3 notes with `review-note` for sessions that waste money (wrong agent types, waiting
+  sessions, no hand-off) and records the review with `review-done`. Deliberate `AB:` experiment arms are never flagged.
+
+The mechanical parts are `python -m devtime setup check | claude-md --cap N [--dry-run] | open`, `tick`,
+`review-context [--hours 2]` (under 5 KB: the 25 most expensive subagents, the last 12 review lines), `review-done --text ...` and `work-assign -` (JSON on stdin); `CLAUDE_CONFIG_DIR`
+overrides `~/.claude`, `DEVTIME_NO_SERVER_START=1` stops `tick` from starting a server.
+
+### Cut usage: `/devtime:optimize`
+
+`/devtime:optimize` measures your last 7 days, ranks the catalogue in `optimizations/catalogue.toml` by estimated
+$/week, adds up to three unproven ideas of its own from the metrics, asks which to apply (globally, or as an A/B with
+`/devtime:ab <id>`), shows a dry-run diff and applies. Items: slim agent types, long jobs on a Haiku runner,
+read-only work on Haiku, hand-off past ~250k context, `CLAUDE_CODE_AUTO_COMPACT_WINDOW=400000`, scripts first,
+2-3 agents at once, Sonnet for well-specified coding (suggest A/B), the weekly cap, background jobs instead of poll
+loops. Each item has the summary, the metric that drives it and what was measured on the author's own usage.
+
+- `python -m devtime analyze [--days 7]`: compact JSON (~2.5 KB): cost per week by model and role, base context by
+  agent type, the share of cost in requests above 250k / 400k context, subagent wait hours and cache re-writes after
+  idle gaps over 5 min, read-only subagents on big models (and their cost at Haiku prices), Opus coding agents (at
+  Sonnet prices), concurrent agents, recurring failures, and the catalogue ranked by `estWeeklyUsd`
+  (`{id, applied, by, estWeeklyUsd, why}`). Estimates are upper bounds ("if every such request were fixed") scaled
+  to a week and overlap (hand-off and auto-compact, runner and polling); applied items show what is still being lost.
+- `python -m devtime optimize list | apply <id> [--dry-run] | remove <id>`: `claude_md` actions write a block between
+  `<!-- devtime:opt:<id> -->` and `<!-- devtime:opt-end:<id> -->` in `~/.claude/CLAUDE.md` (the rest is untouched),
+  `settings_env` actions set a key of `env` in `settings.json` (other keys and the indent are kept, `settings.json.bak`
+  is written first), `note` actions are manual steps. Applying or removing records a change marker ("Applied <title>")
+  that the dashboard's weekly chart draws, so the effect is visible. A catalogue item counts as applied when its block
+  or env entry exists, or (`by: manual`) when CLAUDE.md already says it, matched by the item's `detect` regex.
+  `CLAUDE_CONFIG_DIR` overrides `~/.claude`.
+
+### Test a change first: `/devtime:ab`
+
+`/devtime:ab <catalogue id or description>` sets up an A/B experiment (for example Sonnet vs Opus for coding stages),
+`/devtime:ab report <id>` reads it, `/devtime:ab stop <id>` ends it (and offers to apply the optimization if its arm won).
+Built to avoid the mistakes of a hand-run A/B, where the orchestrating session chose the model per stage (the hard
+ones went to one arm), fix-ups were named differently (rework missed) and cost ignored output:
+
+- Experiments are in `~/.claude/devtime/config/experiments.toml` (`id`, `title`, `active`, `started`, `arms` with
+  `name` / `model` / `agent_type` / `instructions`, optional `opt`). `python -m devtime ab new <id> --title ... --arm
+  name[:model[:agent_type]] --arm ... [--instructions name=text] [--opt <catalogue id>] [--dry-run]` writes it and a block
+  between `<!-- devtime:ab:<id> -->` and `<!-- devtime:ab-end:<id> -->` in `~/.claude/CLAUDE.md`.
+- The block tells sessions to run `python ~/.claude/devtime/devtime.py ab arm <id> <stage>` before each coding stage and
+  name the agent `AB:<id>:<stage> <description>` (fix-ups reuse the tag). `devtime.py` is a launcher that the SessionStart
+  hook (re)writes beside `plugin_root.txt`, so the text keeps working when the plugin's install path changes on update.
+- The arm is `sha1(id:stage) mod number of arms`: assigned by hash, not by the session. `agent_budget.py` denies an
+  Agent / Task launch tagged `AB:<id>:<stage>` of an active experiment whose model or agent type differs from the arm's,
+  naming the right arm. Unknown or stopped experiments pass.
+- `ab report <id> [--json]`: per arm the stages, median cost and minutes, commits, edit calls, output tokens, tool errors,
+  rework rate and cost per commit. A stage is reworked if a later agent (within 24 h) has the same tag, or is in the same
+  work section with a fix / repair / rework / again / retry / follow-up / "...2" description, or has the tag plus a number
+  (`view-toggle2` counts as a continuation of `view-toggle`). Arms under 10 stages are flagged "too few stages to call", arm
+  imbalance and stages that ran off-arm are noted. `ab stop <id>`, `ab list`.
+- The dashboard's experiments table shows new-style experiments next to the legacy `AB:<stage>` rows (Experiment column).
+
+Python 3.11+, standard library only. The first scan reads every transcript (a few GB of transcripts take about 10 s with a process pool);
+after that only the bytes appended since the last scan are read (byte-offset cache in `~/.claude/devtime/cache/`), and only
+transcripts that changed are re-profiled.
+
+## What it measures
+
+Each transcript's wall-clock is split into intervals:
+
+- **model** - one per API request, from the record that triggered it to its last block; carries token usage,
+  thinking time (`thinkingDurationMs`) and estimated cost;
+- **tool calls by kind** - tool_use to tool_result. Background shell runs last until their task-notification is
+  queued (main sessions: `queue-operation`; subagents: `queued_command` attachments), a `TaskStop`, or - if neither
+  was recorded - the last write of the task's output file (metadata only). A foreground call that never got a result
+  (crash, interrupt) ends at the next message, capped at its shell timeout;
+- **compaction** - from the compact boundary's own duration;
+- **gaps** - under 30 s are harness *overhead*; longer ones are *waiting on subagent* (a background agent or
+  workflow is running), *waiting on user* (a human prompt ends it), *waiting on wakeup* or *idle*.
+
+Concurrent intervals in one transcript share their overlap equally, so a transcript's shares add up to its
+wall-clock. **Agent time** is the sum over every transcript of the non-waiting shares (two subagents busy for an hour
+= 2 h); **busy wall-clock** is the union of those intervals across transcripts, and their ratio is the average
+parallelism.
+
+Cost is estimated per request from `message.usage` (input, output, cache reads, 5-minute and 1-hour cache writes)
+and the prices in `config/devtime.toml`. It runs 3-10 % below the `cost-state` totals Claude Code writes on resume,
+because some requests (permission classifiers, summaries) never appear in the transcripts; the dashboard shows both.
+
+## Engine logs: inside Unreal runs
+
+Optional. A project with an `[unreal]` section (`log_globs`) has its Unreal Editor logs harvested: `Saved/Logs`, sibling
+checkouts and worktrees, `Saved/Crashes/*/` (logs of crashed runs) and logs runs write into Claude Code session
+scratchpads. Every gap between two log lines is attributed to
+
+- a **phase**: startup (until the engine is initialised), map load, editor idle, script (from the first Python line),
+  shutdown (from the exit request);
+- an **activity**: the category of the line that ends the gap (Zen/DDC server, SDK detection, shader compile, PCG
+  generation, python, saving, ... - rules in `config/devtime.toml [unreal]`, project rules first);
+- for script lines a script logs itself, a **step**: the time since its previous line, labelled with the message
+  normalised (numbers -> `#`, paths -> `<file.png>`) and grouped into step kinds (screenshot, check, load / generate,
+  ...).
+
+Each run is matched to the agent's shell call that launched it (the shortest call whose command looks like an editor
+launch and whose window holds the run's start), so "unreal run" time splits into time in each editor phase,
+*outside the editor* (GPU-lock waits inside scripts, launch, waits after exit), time *polling a running editor*, and
+calls with *no editor log*. Unreal purges old logs and Claude Code cleans scratchpads, so each log is summarised as
+soon as it appears and archived gzipped to `~/.claude/devtime/logs/<project>/<day>/` (local); the runs are rebuilt
+from the archive when the rules change or the cache is lost. Only phase / activity names, script names and the
+normalised step labels reach the dashboard.
+
+### Findings
+
+Every harvested run is checked for patterns that waste time (`devtime/unreal.py` `detect_issues`): the editor
+throttled to ~3 fps (a background editor without `-unattended`; frame rate from the log's frame counter), repeated
+steps of the same length (a fixed-time wait), Python blocking the editor (a gap the frame counter did not move
+through), checks that fail only at their timeout, slow startups. The dashboard's Findings table groups them by
+script and pattern with the fix; `python -m devtime findings [--latest] [--script X] [--since 1d] [--json]` prints
+the same from the Unreal logs alone (0.4 s), and `/api/findings` serves it.
+
+## Hooks
+
+The plugin registers `ensure_server.py` (SessionStart) and `agent_budget.py` (below) through `hooks/run.sh`, which
+finds `python3` / `python`.
+
+- `hooks/unreal_findings.py` (optional, not registered by the plugin; add it to
+  `~/.claude/settings.json` yourself): after a call that ran or waited on an Unreal run of a
+  project with `[unreal] log_globs`, tells the agent what that run wasted and how to fix it.
+- `hooks/ensure_server.py` also writes `~/.claude/devtime/plugin_root.txt` and the launcher `devtime.py` (see `/devtime:ab`).
+- `hooks/agent_budget.py` (PreToolUse `*` + PostToolUse Bash|PowerShell|TaskOutput|Monitor): subagents only (hook
+  input carries `agent_id` only there). Denies sleeps, poll loops and blocking waits that may run over 4 min (a
+  subagent's prompt cache lives 5 min, so waking up re-writes the whole context), lets a plain long job (a build)
+  through until one of the agent's calls has actually run over 4 min, then refuses further ones; the reason tells the
+  agent to hand the job back to the main session and end. Past 250k tokens of context (then every 150k) it tells the
+  agent to finish its step and hand off. ~0.1 s per call. Limits: `DEVTIME_AGENT_WAIT_LIMIT`, `_WAIT_BUDGET`,
+  `_CONTEXT_NUDGE`. Also (main sessions too) enforces the arms of active `/devtime:ab` experiments on Agent / Task launches.
+
+## Monitoring cost
+
+Every model request is attributed to what started its **turn chain**: the requests from a trigger (human prompt, peer
+message, task-notification) until the next one. A message queued during a turn counts from when the turn picked it up,
+not from when it was queued. The trigger is the model interval's label: `human`, `peer`, `agent`,
+`background-command`, `monitor:<name>`, `start`. For a Monitor event the name is the `MON:<name>` tag in the monitor's
+description or its event lines (`MON:queue-watch queue27: ...`, `[MON:queue-watch] ...`); monitors without one are
+`monitor:untagged`. The first request of a chain carries the `wake` flag, so a *wake* is one chain, and the cost of a
+wake is every request in it. The overview's **Monitoring cost** card, `python -m devtime report` and `/api/overview`
+(`monitoring`) give wakes, cost, average cost per wake and input / cache read / cache write / output tokens by monitor
+and by main session; `/api/watch` has a short version (`monitoring`: totals, top tags and sessions). To tag a monitor,
+start its description with `MON:<name>` and prefix its output lines with `[MON:<name>] ` (`| sed -u 's/^/[MON:name] /'`).
+Tests: `python -m unittest discover -s tests`.
+
+## Weekly limit and throughput
+
+The overview's **Weekly limit** chart shows the account's usage since the plan's last weekly reset as a share of the
+weekly allowance, the limit itself, and two projections to the next reset: at the pace since the weekly reset and at
+the pace since the current 5-hour session window opened (a dot marks where each would hit the limit). The share is
+calibrated against the Claude desktop app's own usage samples (`plan_usage_history`, which holds only the 5-hour and
+weekly percentages): since the last weekly drop, reported share = a + cost / allowance is fitted, giving the allowance
+in API-equivalent dollars; the samples are drawn as dots. The next reset comes from the readings that carry one, else from `weekly_reset`; `weekly_budget_usd` is only the starting allowance before a fit. 5-hour windows are
+chained from request times and re-anchored where the reported 5-hour share drops, so they are approximate.
+Exact readings also come from the `get_usage` calls that sessions already make: the dashboard picks them out of the Claude
+Code transcripts (main and subagent, last 9 days; only the percentages and reset times are kept, cached in
+`~/.claude/devtime/cache/usage_harvest.json`), so no scheduled polling is required.
+**Throughput** shows commits and finished subagents per bucket for the selected range.
+
+The lane under the chart lists the week's large pieces of work. Workstreams (the rules in your project profiles) are
+coarse, so when work **sections** exist they are used instead: the `devtime:labeller` agent (started by the `/devtime:start` loop) runs
+`python -m devtime work-items` (JSON: the existing section names with their stats, and unlabelled subagents with
+their descriptions, plus main sessions with no subagents that cost $3 or more; oldest first, `--days 8 --max 250`),
+names a section for each, and passes `{"<transcript id>": "<section name>"}` ("-" = not a piece of work, don't ask
+again) to `python -m devtime work-assign FILE` (`-` reads stdin), which merges it into `~/.claude/devtime/cache/work_sections.json`. Only ids and section
+names are stored. A section is drawn from the start of its first agent to 95 % of its cost (to now while an agent is
+running) if it cost at least 0.4 % of the allowance or has 4 agents; at most 12 are shown. With nothing labelled in
+the week the lane falls back to the workstreams.
+
+## Usage alerts
+
+After every rebuild the server checks live transcripts (`devtime/alerts.py`, thresholds in `[settings.alerts]`): a
+subagent past $40 (then each doubling), re-writing its cache after waits over 5 min, working with over 300k context,
+or any transcript spending over its 30-minute budget; plus all sessions together per hour. Alerts go to
+`~/.claude/devtime/cache/alerts.json`, the dashboard's Usage alerts card and `/api/alerts`; `hooks/agent_budget.py` passes each
+new one once to the subagent it is about and to its main session (on their next tool call), so the owner can stop,
+re-brief or take over the work. The dashboard server has to be running for alerts to be raised. A user-wide
+SessionStart hook (`hooks/ensure_server.py`) starts it, detached and windowless, whenever a Claude session opens and
+nothing answers on port 8765 (log in `~/.claude/devtime/cache/server.log`).
+
+Three more rules go to the main session only, since only it can act on them: a non-Haiku subagent doing read-only
+work (many calls, no edits, not a planner, reviewer or implementer), a subagent writing code without an
+`AB:<stage>` tag in a session running the model A/B, and a big-context main session checking on running jobs again
+and again (hand the wait to a runner).
+
+For judgement the rules can't encode, the `devtime:reviewer` agent (Haiku, every 2 h from the `/devtime:start` loop) reads
+`python -m devtime review-context` (the `/api/watch` summary of the last hours - sessions, subagents with model, work
+kinds, cost and commits, active alerts, the experiments; no prompts or labels - and the log tail), messages a session
+when something is worth changing, and logs what it raised in `~/.claude/devtime/cache/review-log.md`.
+
+A forked or copied session file repeats the history it was copied from; each API request is counted once, in the
+copy whose session went on longest.
+
+## Projects, rules and workstreams
+
+The plugin's `config/devtime.toml` holds settings, model pricing, built-in tool kinds and the shared classification
+rules. To change a setting, add it to `~/.claude/devtime/config/devtime.toml` (tables are merged key by key; your
+`[[rules]]` come first). `default_project` there sets the project the dashboard opens on; without it, the project
+with the most cost in the last 7 days. Each `~/.claude/devtime/config/projects/<name>.toml` is a project profile
+(`config/projects/` of the plugin is read too, if present). `examples/projects/example.toml` is an example of a profile
+with custom rules (a game-engine build / run, workstreams, optional `[unreal]` log harvesting); copy it there and adapt it.
+Change marks (`python -m devtime mark "what changed"`) are kept in `~/.claude/devtime/config/changes.toml` and drawn on the weekly chart.
+
+- `paths` - globs on the session's working directory (`cwd` of its records, or the desktop app's origin directory).
+  This is how sessions are found, wherever Claude Code filed them: a profile can pick up a main checkout, its
+  `.claude/worktrees/*` and sibling checkouts. `~` is not expanded in `paths`; start a glob with `*` instead. New sessions are
+  picked up on the next scan. Sessions no profile claims are named after their repository folder (the last component of their directory, with a
+  trailing `.claude/worktrees/<name>` removed), so every repo gets a project without any configuration.
+- `rules` - regexes on a shell call's description + command (or a tool name) giving its kind: game run,
+  game build, blender, ... First match wins; project rules run before the shared ones.
+- `workstreams` - regexes on the subagent description, session title, cwd or git branch (in that priority); work
+  no rule claims falls back to its branch name, then its session title.
+
+Config edits are picked up live, without restarting the server.
+
+## Privacy
+
+Only timings, tool names and short labels (shell descriptions, file basenames, subagent descriptions) reach the
+dashboard. Prompts, tool outputs and file contents are never stored or served; the scan cache keeps shell commands
+locally (gitignored) only so the rules can be re-applied. The server binds to 127.0.0.1.
+
+## Layout
+
+    devtime/scan.py      incremental transcript reader -> compact events, discovery, desktop-app titles
+    devtime/analyze.py   events -> intervals, overlap sweep, gaps, tokens/cost, per-project slices
+    devtime/store.py     rescans + rebuilds when transcripts or config change
+    devtime/server.py    local HTTP server (/api/projects, /api/data, /api/version, static/)
+    devtime/unreal.py    optional Unreal Editor log harvester: phases, activities, script steps, archive
+    devtime/report.py    text summary
+    devtime/ab.py        A/B experiments: arms by hash, CLAUDE.md block, report (hooks/agent_budget.py enforces)
+    static/              the dashboard (vanilla JS, no dependencies)
+    config/              default settings, pricing, rules
+    examples/            example project profile
+    hooks/ agents/ skills/ .claude-plugin/   the plugin: hooks, slim agents, skills, manifest + marketplace

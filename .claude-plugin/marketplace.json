@@ -1,0 +1,16 @@
+{
+  "name": "devtime",
+  "owner": {
+    "name": "billw2012"
+  },
+  "metadata": {
+    "description": "Local dashboard of where Claude Code time and tokens go"
+  },
+  "plugins": [
+    {
+      "name": "devtime",
+      "source": "./",
+      "description": "Local dashboard of where Claude Code time and tokens go, usage alerts, and tools to cut token use"
+    }
+  ]
+}

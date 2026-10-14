@@ -1,0 +1,237 @@
+# devtime settings, model pricing and the classification rules shared by every project.
+# Project profiles (which sessions belong to a project, extra rules, workstreams) live in <data dir>/config/projects/*.toml (see examples/projects/).
+# Your own overrides of anything below go in <data dir>/config/devtime.toml (tables merge key by key).
+
+[settings]
+projects_dir = "~/.claude/projects"       # Claude Code transcripts: <project>/<session>.jsonl + subagents
+# Extra folders laid out like projects_dir (e.g. Cowork sessions); globs allowed.
+extra_project_dirs = []
+# Claude desktop app session metadata (titles of desktop sessions); missing folders are skipped. Optional: the path
+# below is the Windows location, adjust it for your OS.
+desktop_session_dirs = ["~/AppData/Roaming/Claude/claude-code-sessions"]
+# cache_dir defaults to <data dir>/cache (~/.claude/devtime/cache, or $DEVTIME_HOME/cache).
+idle_gap_s = 30           # uncovered gaps longer than this are idle / waiting; shorter ones are harness overhead
+host = "127.0.0.1"
+port = 8765
+poll_s = 10               # server re-scans transcripts this often
+# The project the dashboard opens on; unset = the one with the most cost in the last 7 days.
+# default_project = "MyProject"
+# Rough weekly plan allowance in API-equivalent USD, for the overview's weekly-limit chart. Only a starting point: once
+# usage readings are available (from get_usage calls, or the desktop app's usage history) the allowance is fitted from them.
+weekly_budget_usd = 5000
+# Optional: any instant the plan's weekly limit resets (your usage page shows it); resets repeat every 7 days. Not needed
+# when readings carry the reset time.
+# weekly_reset = "2026-01-02T00:00:00Z"
+# Optional: the Claude desktop app's plan-usage samples (5-hour and weekly %, nothing else), used to calibrate the
+# weekly-limit chart. Windows location; missing files are skipped.
+plan_usage_history = "~/AppData/Roaming/Claude/plan-usage-history.json"
+
+# Usage alerts (devtime/alerts.py): live transcripts using more than they ought to; delivered to the owning
+# session by hooks/agent_budget.py. Defaults are set so that only unusually expensive agents trigger. Leave a key out to keep its default.
+[settings.alerts]
+agent_cost = 40.0         # $ for one subagent; alerts again at each doubling
+churn_count = 2           # cache re-writes after waits over 5 min, in the last hour ...
+churn_cost = 5.0          # ... costing at least this
+context = 300000          # subagent context per call (median of its last 5 requests); main session only is told
+burn_sub = 15.0           # $ in the last 30 min
+burn_main = 25.0
+machine_burn = 80.0       # $ in the last hour, all sessions (dashboard only)
+
+# USD per million tokens. cache_write_* are the 5-minute and 1-hour prompt-cache writes. Models are matched by
+# prefix, longest first, so "claude-opus-4" covers every Opus 4.x without its own row.
+[pricing]
+"claude-fable-5-1"  = { input = 10.0, output = 50.0, cache_read = 0.25, cache_write_5m = 12.5, cache_write_1h = 20.0 }
+"claude-fable-5"    = { input = 10.0, output = 50.0, cache_read = 1.0,  cache_write_5m = 12.5, cache_write_1h = 20.0 }
+"claude-mythos"     = { input = 10.0, output = 50.0, cache_read = 0.25, cache_write_5m = 12.5, cache_write_1h = 20.0 }
+"claude-opus-5-5"   = { input = 4.0,  output = 20.0, cache_read = 0.20, cache_write_5m = 5.0,  cache_write_1h = 8.0 }
+"claude-opus-5"     = { input = 5.0,  output = 25.0, cache_read = 0.50, cache_write_5m = 6.25, cache_write_1h = 10.0 }
+"claude-opus-4"     = { input = 5.0,  output = 25.0, cache_read = 0.50, cache_write_5m = 6.25, cache_write_1h = 10.0 }
+"claude-sonnet-5"   = { input = 2.0,  output = 10.0, cache_read = 0.20, cache_write_5m = 2.5,  cache_write_1h = 4.0 }
+"claude-sonnet-4"   = { input = 3.0,  output = 15.0, cache_read = 0.30, cache_write_5m = 3.75, cache_write_1h = 6.0 }
+"claude-haiku-5"    = { input = 0.10, output = 0.50, cache_read = 0.01, cache_write_5m = 0.125, cache_write_1h = 0.20, long_prompt_over = 100000, long_prompt_scale = 5.0 }
+"claude-haiku-4"    = { input = 1.0,  output = 5.0,  cache_read = 0.10, cache_write_5m = 1.25, cache_write_1h = 2.0 }
+
+# Kinds that are someone else's work or nobody's: shown, but left out of agent (busy) time.
+[kinds]
+waiting = ["idle", "waiting on user", "waiting on subagent", "waiting on wakeup", "editor open for user"]
+
+# Tool -> kind for built-in tools (shell and MCP tools go through the rules below first).
+[tools]
+Read = "read/search code"
+Grep = "read/search code"
+Glob = "read/search code"
+LSP = "read/search code"
+Edit = "edit code"
+Write = "edit code"
+NotebookEdit = "edit code"
+Agent = "waiting on subagent"
+Workflow = "waiting on subagent"
+SendMessage = "talk to subagent"
+ListAgents = "talk to subagent"
+SubagentHandback = "talk to subagent"
+StructuredOutput = "harness"
+AskUserQuestion = "waiting on user"
+SendUserFile = "report to user"
+PushNotification = "report to user"
+ScheduleWakeup = "loop / wakeup"
+Monitor = "loop / wakeup"
+TaskStop = "loop / wakeup"
+TaskOutput = "loop / wakeup"
+CronCreate = "loop / wakeup"
+WebSearch = "web"
+WebFetch = "web"
+ToolSearch = "harness"
+Skill = "harness"
+TodoWrite = "harness"
+EnterPlanMode = "harness"
+ExitPlanMode = "harness"
+Artifact = "publish / docs"
+
+# Rules: first match wins; a project's own rules run before these. Fields:
+#   kind  - the kind assigned
+#   tool  - regex on the tool name (default: shell tools, i.e. Bash / PowerShell)
+#   text  - regex (case-insensitive) on a shell call's description + command, or an MCP call's main input fields
+# Shell calls that match nothing become "shell other"; MCP calls become "mcp: <server>".
+[[rules]]
+kind = "git"
+text = '^\s*(cd [^&;\n]+(&&|;)\s*)?git\b|\bgit (commit|push|pull|merge|rebase|status|diff|log|lfs|worktree|checkout|stash|fetch)\b|\bgh (pr|repo|api|issue|run)\b'
+
+[[rules]]
+kind = "downloads"
+text = '\b(curl|wget|yt-dlp|Invoke-WebRequest|iwr)\b|\bdownload'
+
+[[rules]]
+kind = "install / env"
+text = '\b(pip|uv) (install|sync|add)\b|\bnpm (install|ci|i)\b|\bwinget\b|\bchoco\b|\bapt(-get)? install\b'
+
+[[rules]]
+kind = "build"
+text = '\b(cmake|msbuild|ninja|make|cargo build|dotnet build|npm run build|tsc|gradle)\b'
+
+[[rules]]
+kind = "tests"
+text = '\b(pytest|unittest|npm (run )?test|cargo test|dotnet test|ctest|vitest|jest)\b'
+
+[[rules]]
+kind = "python tools"
+text = '\buv run\b|\bpython3?\b|\bpy\b'
+
+[[rules]]
+kind = "wsl other"
+text = '\bwsl\b'
+
+[[rules]]
+kind = "blender (MCP)"
+tool = '(?i)^mcp__blender'
+
+[[rules]]
+kind = "browser"
+tool = '^mcp__(Claude_Browser|claude-in-chrome|playwright)'
+
+[[rules]]
+kind = "computer use"
+tool = '^mcp__computer-use'
+
+[[rules]]
+kind = "publish / docs"
+tool = '^mcp__[0-9a-f]{8}-'
+
+[[rules]]
+kind = "harness"
+tool = '^mcp__(ccd_|visualize|scheduled-tasks|mcp-registry|terminal__)'
+
+# Rules tried before any project's rules: shell calls that only read files, whatever they mention.
+[[pre_rules]]
+kind = "read/search code"
+text = '\A(?![\s\S]*(UnrealEditor|ExecCmds|ExecutePythonScript|blender|sleep|while |until ))[^\n]*\n\s*(cd [^\n;&|]+(&&|;)\s*)?(sed -n|grep|rg|cat|head|tail|ls|wc|find|Get-Content|Select-String|Get-ChildItem|type)\b'
+
+# Unreal Editor logs (projects opt in with an [unreal] section listing log_globs). Phases come from these markers;
+# each gap between log lines gets the activity of the line that ends it: first matching rule (regex on
+# "Category: message"; project activities first), else "other".
+[unreal]
+startup_end = 'Engine is initialized|Total Editor Startup Time|Starting Game\.'
+map_start = '^Cmd: MAP LOAD|LoadMap: |Loading map |Bringing World .* up for play'
+map_end = 'Map check complete|Took .* seconds to LoadMap|LoadMap took|Finished loading map'
+script_start = '^LogPython|^Cmd: py |ExecutePythonScript'
+shutdown = '^LogExit|^Cmd: QUIT_EDITOR|RequestExit|Engine exit requested|BeginExitIfRequested'
+crash = 'Fatal error|=== Critical error|Unhandled Exception|Assertion failed'
+# A shell call whose command matches this may have launched an Unreal Editor run (each run is matched to the
+# shortest such call containing its start).
+launch = 'UnrealEditor|ExecCmds|ExecutePythonScript|-run=pythonscript'
+# A shell call whose command matches this is waiting on something (polls, sleeps), not running it.
+wait = '\bsleep \d|\buntil\b|\bwhile\b|Wait-Process|Start-Sleep|\bwait\b|tail -f'
+
+[[unreal.activities]]
+name = "zen / DDC server"
+match = '^(LogZenServiceInstance|LogDerivedDataCache|LogZen)'
+
+# The editor's startup call to UnrealBuildTool (AutoSDK) takes UBT's single-instance lock: it waits for any build
+# running against the same engine, from any checkout.
+[[unreal.activities]]
+name = "waiting for UnrealBuildTool (a build elsewhere)"
+match = '^LogTargetPlatformManager: UBT AutoSDK'
+
+[[unreal.activities]]
+name = "SDK / device detection"
+match = '^(LogTurnkeySupport|LogMonitoredProcess|LogTargetPlatformManager)'
+
+[[unreal.activities]]
+name = "shader compile"
+match = '^(LogShaderCompilers|LogShaders|LogMaterial)'
+
+[[unreal.activities]]
+name = "asset build / import"
+match = '^(LogAssetCompiler|LogStaticMesh|LogMeshUtilities|LogMeshBuilder|LogTexture|LogInterchange\w*|LogFbx|LogNanite|LogSkeletalMesh|LogDistanceField)'
+
+[[unreal.activities]]
+name = "procedural generation"
+match = '^(LogPCG\w*)'
+
+[[unreal.activities]]
+name = "python"
+match = '^LogPython'
+
+[[unreal.activities]]
+name = "saving / source control"
+match = '^(LogSavePackage|LogUObjectHash|LogFileHelpers|LogSourceControl|SourceControl|LogContentValidation)'
+
+[[unreal.activities]]
+name = "render / capture"
+match = '^(LogScreenshot\w*|LogHighResScreenshot|LogRenderer|LogRHI|LogD3D\w*|LogVulkan\w*|LogSlate: .*[Ss]creenshot|LogMovieRenderPipeline\w*)'
+
+[[unreal.activities]]
+name = "automation tests"
+match = '^(LogAutomation\w*|AutomationTestingLog|LogFunctionalTest)'
+
+[[unreal.activities]]
+name = "garbage collection"
+match = '^(LogGarbage|LogGC)'
+
+[[unreal.activities]]
+name = "map / world"
+match = '^(LogWorld\w*|LogLevel|LogEditorServer|MapCheck|Cmd|LogStreaming|LogLevelInstance|LogActorFactory|LogEngine)'
+
+[[unreal.activities]]
+name = "asset registry / loading"
+match = '^(LogAssetRegistry|LogUObjectGlobals|LogLinker|LogPackageName|LogContentBrowser|LogCollectionManager|LogFileCache)'
+
+[[unreal.activities]]
+name = "modules / plugins / scripts"
+match = '^(LogModuleManager|LogPluginManager|Angelscript|LogInit|LogCore|LogConfig|LogWindows|LogPakFile|LogUObjectArray|LogEOS\w*|LogOnline\w*|LogHttp)'
+
+# Script steps (a script's own log lines, normalised: numbers -> #, paths -> <file.ext>) are grouped by these.
+[[unreal.steps]]
+name = "screenshot / capture"
+match = '<file\.(png|jpe?g|exr|bmp|hdr)>|screenshot|HighResShot|captur'
+
+[[unreal.steps]]
+name = "check"
+match = '^check |check (passed|failed)|\bFAIL|\bPASS|assert'
+
+[[unreal.steps]]
+name = "load / generate"
+match = 'loaded|generat|spawned|rebuil|bak(e|ed|ing)\b|import'
+
+[[unreal.steps]]
+name = "save / export"
+match = 'saved|wrote|export|dump'

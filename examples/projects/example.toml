@@ -1,0 +1,79 @@
+# Example project profile. Copy it to <data dir>/config/projects/<name>.toml (~/.claude/devtime/config/projects/)
+# and adapt it. Every table is optional except `name` and `paths`. Config edits are picked up live.
+#
+# Sessions that no profile claims still get a project of their own, named after their repository folder, so a profile
+# is only needed to group several checkouts into one project, to add your own tool kinds, or to name workstreams.
+
+name = "MyGame"
+
+# A transcript belongs to this project when its main working directory (or, for desktop-app sessions, the app's origin
+# directory) matches one of these globs (case-insensitive, either slash style). Subagents follow their parent session.
+paths = [
+    '*/mygame',                  # the main checkout, wherever it lives ('*' also matches '/')
+    '*/mygame/*',                # anything below it, including .claude/worktrees/*
+    '*/mygame-*',                # sibling checkouts: mygame-art, mygame-ui, ... (and anything below them)
+]
+
+# Shell / MCP classification, tried before the shared rules in the plugin's config/devtime.toml. First match wins.
+#   kind - the label shown on the dashboard (any text you like)
+#   tool - regex on the tool name (default: shell tools, Bash / PowerShell)
+#   text - regex (case-insensitive) on "description\ncommand" of a shell call, or the main input fields of an MCP call.
+#          A pattern after '\A[^\n]*\n[\s\S]*?' looks at the command only; one after '\A[^\n]*' at the description only.
+
+# What the command itself runs beats what its description says.
+[[rules]]
+kind = "game build"
+text = '\A[^\n]*\n[\s\S]*?(Build\.bat|UnrealBuildTool|RunUAT|msbuild\b.*\.sln|cmake --build)'
+
+[[rules]]
+kind = "game run"
+text = '\A[^\n]*\n[\s\S]*?(UnrealEditor|godot(\.exe)?\s+--headless|Unity(\.exe)?\s+-batchmode|run_game\.(sh|ps1))'
+
+# Otherwise the description: "Wait for the lighting bake" counts as the thing it waits for.
+[[rules]]
+kind = "game run"
+text = '\A[^\n]*(playtest|smoke test|headless run|lighting bake)'
+
+# MCP tools of a game-engine editor server.
+[[rules]]
+kind = "game editor (MCP)"
+tool = '^mcp__(unreal|godot|unity)'
+
+# Workstreams group transcripts (and, by branch, the parts of a session) into lines of work for the dashboard.
+# Each rule matches (case-insensitive regex) on any of: description (subagent / workflow description), session
+# (session title), branch (git branch at the time of the call), cwd. First match wins. Unmatched work falls back to
+# the branch name, then to the session title.
+[[workstreams]]
+name = "Terrain"
+description = 'terrain|heightmap|erosion'
+branch = 'terrain'
+
+[[workstreams]]
+name = "Art kits"
+description = 'art kit|materials?|textures?'
+branch = '(^|[-/])art([-/]|$)'
+cwd = 'mygame-art'
+
+[[workstreams]]
+name = "Tooling / infra"
+description = 'build script|ci\b|packaging'
+branch = '^tools?[-/]'
+
+# Optional: harvest game-engine (Unreal Editor) logs. Read only; copies are archived gzipped in <data dir>/logs so
+# runs survive the engine purging its log folder. See docs/reference.md ("Engine logs").
+# [unreal]
+# log_globs = [
+#     '~/dev/mygame/Saved/Logs/*.log',
+#     '~/dev/mygame-*/Saved/Logs/*.log',
+#     '~/dev/mygame/Saved/Crashes/*/*.log',
+# ]
+#
+# # Your own activity names for log categories (tried before the shared ones in config/devtime.toml [unreal]).
+# [[unreal.activities]]
+# name = "procedural generation"
+# match = '^(LogMyGameGen\w*)'
+#
+# # Group a script's own progress lines (normalised: numbers -> #, paths -> <file.ext>) into step kinds.
+# [[unreal.steps]]
+# name = "check"
+# match = 'problem\(s\)|expected|identical|duplicates'

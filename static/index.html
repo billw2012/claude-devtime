@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dev Time Overview</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect x='1' y='3' width='9' height='3' rx='1' fill='%232a78d6'/%3E%3Crect x='4' y='7' width='11' height='3' rx='1' fill='%23eb6834'/%3E%3Crect x='2' y='11' width='6' height='3' rx='1' fill='%231baf7a'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <h1>Dev time</h1>
+    <select id="project" aria-label="Project"></select>
+  </div>
+  <div class="controls">
+    <div class="seg" id="range" role="group" aria-label="Time range">
+      <button data-v="1h">1h</button><button data-v="6h">6h</button><button data-v="12h">12h</button><button data-v="24h" class="on">24h</button><button data-v="7d">7d</button><button data-v="30d">30d</button>
+    </div>
+    <span id="live" class="live" title="Refreshes every 15 seconds"></span>
+    <a class="nav" id="details" href="details.html">Details →</a>
+    <button id="theme" class="ghost" type="button" aria-label="Toggle dark mode">◐</button>
+  </div>
+</header>
+
+<main id="main">
+  <div class="section-title">Efficiency</div>
+  <section class="tiles" id="eff"></section>
+  <div class="section-title">Performance</div>
+  <section class="tiles" id="perf"></section>
+
+  <article class="card">
+    <header><h2>Weekly limit</h2><span class="sub" id="limit-sub"></span></header>
+    <div id="limit"></div>
+    <div id="limit-legend" class="legend"></div>
+    <ol id="limit-changes" class="changes"></ol>
+  </article>
+  <article class="card">
+    <header><h2>Throughput</h2><span class="sub" id="through-sub"></span></header>
+    <div id="through"></div>
+    <div id="through-legend" class="legend"></div>
+  </article>
+
+  <article class="card">
+    <header><h2>Live now</h2><span class="sub" id="live-sub"></span></header>
+    <div id="live-list" class="table-wrap"></div>
+  </article>
+
+  <article class="card alerts" id="alerts-card" hidden>
+    <header><h2>Usage alerts</h2><span class="sub" id="alerts-sub"></span></header>
+    <div id="alerts" class="table-wrap"></div>
+  </article>
+
+  <section class="grid2">
+    <article class="card">
+      <header><h2>Cost over time</h2><span class="sub" id="trend-sub"></span></header>
+      <div id="trend"></div>
+      <div id="trend-legend" class="legend"></div>
+    </article>
+    <article class="card">
+      <header><h2>Biggest spenders</h2><span class="sub">in this range</span></header>
+      <div id="spenders" class="table-wrap"></div>
+    </article>
+  </section>
+  <article class="card">
+    <header><h2>Monitoring cost</h2><span class="sub" id="mon-sub"></span></header>
+    <p class="note">Model turns started by Monitor events (task-notifications). A <em>wake</em> is one turn chain:
+      the requests from the event until the next human prompt or notification. The tag is the
+      <code>MON:&lt;name&gt;</code> in the monitor's description / event lines; monitors without one are
+      <code>untagged</code>.</p>
+    <div class="grid2">
+      <div id="mon-tags" class="table-wrap"></div>
+      <div id="mon-sessions" class="table-wrap"></div>
+    </div>
+  </article>
+  <article class="card">
+    <header><h2>Model experiments</h2><span class="sub" id="exp-sub"></span></header>
+    <p class="note">Implementation A/B: stages whose subagent description starts <code>AB:&lt;stage&gt;</code>, the arm
+      rotated by the main session (Opus, Sonnet, or an Opus planner <code>AB:&lt;stage&gt; plan</code> then Sonnet);
+      cost, time and agent count include every agent of the stage (planner and fix-ups too).
+      Runner: jobs run by the <code>runner</code> agent, by model.</p>
+    <div class="grid2">
+      <div id="exp-ab" class="table-wrap"></div>
+      <div id="exp-runner" class="table-wrap"></div>
+    </div>
+    <div id="exp-types" class="table-wrap"></div>
+  </article>
+  <footer class="foot">Costs are API-equivalent estimates from token counts and config pricing. Timings and tool labels
+    only; prompts, outputs and file contents are never read into the dashboard.</footer>
+</main>
+<div id="tip" class="tip" role="tooltip" hidden></div>
+<script src="overview.js"></script>
+</body>
+</html>

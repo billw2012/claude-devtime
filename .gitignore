@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+out/
+.claude/worktrees/
+.claude/settings.local.json
+*.bak
+.venv/
+.DS_Store

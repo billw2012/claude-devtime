@@ -1,0 +1,141 @@
+# Optimizations /devtime:optimize can recommend and apply (python -m devtime optimize list | apply <id> | remove <id>).
+#
+# Per item: id, title, summary (why), signal (the `devtime analyze` metric that drives the estimate), evidence (what was
+# measured on the author's machine), detect (optional regex: the item counts as applied when ~/.claude/CLAUDE.md
+# already says it in its own words), and apply = actions of these kinds:
+#   claude_md     text            a block between <!-- devtime:opt:<id> --> and <!-- devtime:opt-end:<id> --> in CLAUDE.md
+#   settings_env  key, value      an entry of "env" in settings.json
+#   note          text            a manual step; nothing is written
+# The plugin ships the agent types devtime:coder, devtime:reader and devtime:runner (agents/).
+
+[[opt]]
+id = "slim-agents"
+title = "Slim agent types instead of general-purpose"
+summary = "A general-purpose agent re-reads ~50k tokens of tool definitions on every request; coder / reader carry 10-20k."
+signal = "general-purpose requests x (base context - 15k) x cache-read price"
+evidence = "One week: 176 general-purpose subagents started at a median 53k tokens of context (18k requests), coder at 19k, reader at 13k; every request re-reads it."
+detect = '(?i)slim agent|devtime:coder|`coder`'
+
+[[opt.apply]]
+kind = "claude_md"
+text = """## Agent types
+- Pick the slimmest agent type that can do the job: `devtime:coder` for coding stages, `devtime:reader` for read-only work, `devtime:runner` for long jobs. Every request re-reads the agent's fixed context (tool definitions, memory files): about 50k tokens for general-purpose, 10-20k for the slim types.
+- Use general-purpose only when the agent needs MCP tools, the browser or its own subagents."""
+
+[[opt]]
+id = "runner-for-long-jobs"
+title = "Long jobs on a Haiku runner"
+summary = "Builds, test suites and editor runs go to the runner agent (Haiku); a coding agent that waits re-writes its whole cache."
+signal = "cache re-writes of subagents after idle gaps over 5 min"
+evidence = "A Haiku runner cost a median $0.009 per job against $0.10 on Sonnet; one overnight Opus agent waiting on 34 builds cost $213, $171 of it cache re-writes. One week: 326 subagent cache re-writes after waits over 5 min, $750."
+detect = '(?i)devtime:runner|`runner`|runner agent'
+
+[[opt.apply]]
+kind = "claude_md"
+text = """## Long jobs
+- Anything that may take over ~4 minutes (a build, a test suite, an editor or render run) is started in the background by the main session or handed to the `devtime:runner` agent (Haiku): give it the exact command, the working directory and what to report. It waits and returns a short summary.
+- Main sessions and coding agents never wait on slow jobs themselves. A subagent's prompt cache lives 5 minutes, so every wake-up after a wait re-writes its whole context."""
+
+[[opt]]
+id = "readonly-on-haiku"
+title = "Searches, reads and progress checks on Haiku"
+summary = "Read-only subagents (no edits) on Opus or Sonnet cost several times what the same reading costs on Haiku."
+signal = "cost of read-only subagents on non-Haiku models, re-priced at Haiku rates"
+evidence = "One week: 39 read-only subagents on Opus / Sonnet cost $94; the same tokens at Haiku prices $4."
+detect = '(?i)devtime:reader|`reader`|reader agent'
+
+[[opt.apply]]
+kind = "claude_md"
+text = """## Read-only work
+- Searching code, reading files or logs, and checking a job's progress or status go to the `devtime:reader` agent (Haiku). Sonnet or Opus are for writing code and for judgement calls (design, review, planning)."""
+
+[[opt]]
+id = "handoff-250k"
+title = "Subagents hand off past ~250k context"
+summary = "A long-lived agent re-reads its whole context on every call; a fresh agent from a short handoff is cheaper."
+signal = "cost of subagent requests above 250k context, beyond the first 250k"
+evidence = "Subagent contexts reached 500-900k tokens on 1M-context models; each call re-read all of it. One week: 130 subagents went past 250k, 74% of cost was requests above 250k context."
+detect = '(?i)hand ?off.{0,80}250k|250k.{0,80}hand ?off'
+
+[[opt.apply]]
+kind = "claude_md"
+text = """## Subagent hand-off
+- A subagent whose context passes ~250k tokens finishes its current step, commits, and ends with a short handoff (done / next / key paths and commands). The caller continues with a fresh agent. Compaction loses detail, so hand off before it comes to that."""
+
+[[opt]]
+id = "autocompact-400k"
+title = "Cap the auto-compact window at 400k"
+summary = "Compacts earlier on 1M-context models so a session does not carry (and re-read) 500k+ tokens on every call."
+signal = "cost of requests above 400k context, beyond the first 400k"
+evidence = "Contexts had reached 500-900k tokens on 1M-context models. The author: 'I think it helped a lot'."
+detect = ''
+
+[[opt.apply]]
+kind = "settings_env"
+key = "CLAUDE_CODE_AUTO_COMPACT_WINDOW"
+value = "400000"
+
+[[opt]]
+id = "scripts-first"
+title = "Scripts for mechanical work"
+summary = "Build / test / capture / compare steps run as a script that writes a short summary; the model reads the summary, not the log."
+signal = "main-session shell calls of build / tests kinds"
+evidence = "Mechanical steps done by agents (read log, decide, re-run) re-read the whole context each time; a script writes a 10-line summary once."
+detect = '(?i)scripts where possible|scripts first|scripts-first'
+
+[[opt.apply]]
+kind = "claude_md"
+text = """## Scripts first
+- Mechanical work (build, test, capture, check, compare, wait) runs as a plain script or background process that costs no tokens and writes a short summary (failures, counts, paths). Read the summary, never the raw log. Turn a multi-step procedure into a script the first time it recurs.
+- Keep heavy output out of context: grep or tail logs instead of reading them, read only the screenshots that must be judged, downscaled or cropped."""
+
+[[opt]]
+id = "parallelism"
+title = "At most 2-3 agents at once"
+summary = "Many agents in parallel burn the plan's limits faster and pile up cache re-writes, with little extra throughput."
+signal = "peak and typical number of agents active in the same 5 minutes"
+evidence = "One week: typical 2 agents active per 5 minutes, p90 5, peak 9; the machine-burn alert (over $80 in an hour) fired in the peaks."
+detect = '(?i)(2-3|two or three) agents'
+
+[[opt.apply]]
+kind = "claude_md"
+text = """## Parallelism
+- Run at most 2-3 agents at once across all sessions on the machine. Serialize heavy builds that share a toolchain lock instead of starting them in parallel."""
+
+[[opt]]
+id = "sonnet-default-coding"
+title = "Sonnet for well-specified coding stages"
+summary = "Opus for design and hard stages, Sonnet for stages with a clear brief. Quality is unproven: A/B it before adopting."
+signal = "cost of coding subagents (with edits) on Opus, re-priced at Sonnet rates"
+evidence = "The author's A/B so far is small and biased (Sonnet got the easier stages). Suggest A/B first."
+detect = '(?i)sonnet.{0,60}(default|coding)'
+
+[[opt.apply]]
+kind = "claude_md"
+text = """## Model choice
+- Default coding stages with a clear brief to Sonnet; use Opus for design, planning and stages that failed on Sonnet. State the model when launching an agent."""
+
+[[opt]]
+id = "weekly-cap"
+title = "Weekly usage cap"
+summary = "Sessions call get_usage before launching agents and stop starting new ones at the cap, so the week never ends in a hard stop."
+signal = "whether the /devtime:start CLAUDE.md block exists"
+evidence = "Without a cap an autonomous run keeps launching stages until the plan's weekly limit blocks everything."
+detect = '(?i)weekly cap|weekly all-models limit'
+
+[[opt.apply]]
+kind = "note"
+text = "Run /devtime:start: it asks for the cap and writes the 'Usage tracking (devtime)' block into ~/.claude/CLAUDE.md."
+
+[[opt]]
+id = "background-not-polling"
+title = "Wait via background jobs and notifications, not poll loops"
+summary = "A sleep / poll loop wakes the agent again and again; after 5 minutes of idle each wake re-writes its cache."
+signal = "cache re-writes after gaps that were spent in sleep / poll / wait calls"
+evidence = "One week: 42 subagent hours in sleep / poll / wait calls; the cache re-writes after those waits cost $405."
+detect = '(?i)poll loop|not poll|never poll'
+
+[[opt.apply]]
+kind = "claude_md"
+text = """## Waiting
+- Wait for a long job by running it in the background and ending your turn until its completion notification arrives, not with `sleep` or a poll loop. A subagent's prompt cache lives 5 minutes, a main session's 1 hour, so every wake-up after a longer wait re-writes the whole context."""

@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dev Time Details</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect x='1' y='3' width='9' height='3' rx='1' fill='%232a78d6'/%3E%3Crect x='4' y='7' width='11' height='3' rx='1' fill='%23eb6834'/%3E%3Crect x='2' y='11' width='6' height='3' rx='1' fill='%231baf7a'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <a class="nav" id="nav-overview" href="./">← Overview</a>
+    <h1>Dev time · details</h1>
+    <select id="project" aria-label="Project"></select>
+  </div>
+  <div class="status">
+    <span id="live" class="live" title="Transcripts are rescanned every few seconds"></span>
+    <button id="theme" class="ghost" type="button" aria-label="Toggle dark mode">◐</button>
+  </div>
+</header>
+
+<section class="filters" aria-label="Filters">
+  <label>Range
+    <select id="f-range">
+      <option value="all">All time</option>
+      <option value="1h">Last hour</option>
+      <option value="6h">Last 6 hours</option>
+      <option value="12h">Last 12 hours</option>
+      <option value="24h">Last 24 hours</option>
+      <option value="today">Today</option>
+      <option value="7d">Last 7 days</option>
+      <option value="30d">Last 30 days</option>
+      <option value="custom">Custom (timeline selection)</option>
+    </select>
+  </label>
+  <label>Session <select id="f-session"></select></label>
+  <label>Agents
+    <select id="f-role">
+      <option value="">Sessions + subagents</option>
+      <option value="main">Main sessions only</option>
+      <option value="sub">Subagents only</option>
+    </select>
+  </label>
+  <label>Workstream <select id="f-ws"></select></label>
+  <label>Branch <select id="f-branch"></select></label>
+  <label class="grow">Subagent <input id="f-search" type="search" placeholder="description contains…"></label>
+  <button id="f-reset" class="ghost" type="button">Reset</button>
+</section>
+<div id="range-note" class="range-note" hidden></div>
+
+<main id="main">
+  <article class="card alerts" id="alerts-card" hidden>
+    <header><h2>Usage alerts</h2><span class="sub" id="alerts-sub"></span></header>
+    <p class="note">Live transcripts using more than they ought to (all projects). Each new alert is passed once, by the
+      user-wide hook, to the subagent it is about and to its main session.</p>
+    <div id="alerts" class="table-wrap"></div>
+  </article>
+  <section class="tiles" id="tiles"></section>
+
+  <section class="grid2">
+    <article class="card">
+      <header><h2>Where agent time goes</h2>
+        <label class="check"><input type="checkbox" id="opt-ue-split" checked> split Unreal runs</label>
+        <label class="check"><input type="checkbox" id="opt-waiting"> include waiting</label></header>
+      <div id="kinds"></div>
+    </article>
+    <article class="card">
+      <header><h2>Agent time over time</h2>
+        <div class="seg" id="opt-bucket" role="group" aria-label="Bucket">
+          <button data-v="auto" class="on">Auto</button><button data-v="hour">Hour</button><button data-v="day">Day</button>
+        </div></header>
+      <div id="overtime"></div>
+      <div id="overtime-legend" class="legend"></div>
+    </article>
+  </section>
+
+  <article class="card" id="ue-card" hidden>
+    <header><h2>Inside Unreal runs</h2><span class="sub" id="ue-sub"></span>
+      <label class="check"><input type="checkbox" id="opt-ue-unmatched"> include runs no agent call launched</label></header>
+    <div class="grid2 flat">
+      <div><h3>Where editor time goes</h3><div id="ue-phases"></div><div id="ue-phase-legend" class="legend"></div></div>
+      <div><h3>Script time by step kind</h3><p class="note">time from the previous line the script logged to the step's own line</p><div id="ue-stepkinds"></div></div>
+    </div>
+    <h3>Findings: what wastes time, and what to change</h3>
+    <p class="note">Flagged automatically on every harvested run (also: <code>python -m devtime findings</code>). Hover a row for the fix.</p>
+    <div id="ue-findings" class="table-wrap"></div>
+    <div class="subhead"><h3>Run anatomy</h3>
+      <div class="seg" id="opt-ue-sort" role="group" aria-label="Sort runs">
+        <button data-v="slow" class="on">Slowest</button><button data-v="late">Latest</button>
+      </div></div>
+    <div id="ue-anatomy"></div>
+    <h3>By script</h3>
+    <div id="ue-scripts" class="table-wrap"></div>
+    <h3>Automation tests</h3>
+    <p class="note">From the test runs' logs (Test Started / Completed). Slow tests (60 s and over) are also flagged in Findings.</p>
+    <div id="ue-tests" class="table-wrap"></div>
+    <h3>Slowest script steps</h3>
+    <div id="ue-steps" class="table-wrap tall"></div>
+  </article>
+
+  <article class="card">
+    <header><h2>Timeline</h2>
+      <div class="hint">wheel = zoom · drag = pan · shift-drag = set range · double-click = fit</div>
+      <div class="tl-buttons">
+        <label class="check"><input type="checkbox" id="opt-tl-waiting" checked> waiting</label>
+        <label class="check"><input type="checkbox" id="opt-tl-model" checked> model</label>
+        <button id="tl-fit" class="ghost" type="button">Fit</button>
+      </div></header>
+    <div id="tl-legend" class="legend"></div>
+    <div class="tl-wrap">
+      <canvas id="tl-axis" height="86"></canvas>
+      <div id="tl-scroll" class="tl-scroll"><canvas id="tl-rows"></canvas></div>
+    </div>
+  </article>
+
+  <section class="grid2">
+    <article class="card">
+      <header><h2>Workstreams</h2></header>
+      <div id="workstreams" class="table-wrap"></div>
+    </article>
+    <article class="card">
+      <header><h2>Main sessions: active vs waiting</h2></header>
+      <div id="mains" class="table-wrap"></div>
+    </article>
+  </section>
+
+  <article class="card">
+    <header><h2>Slowest subagents</h2><span class="sub">busy time · click to show on the timeline</span></header>
+    <div id="subagents" class="table-wrap tall"></div>
+  </article>
+
+  <article class="card">
+    <header><h2>Slowest tool calls</h2>
+      <select id="opt-slow-kind" aria-label="Kind"></select></header>
+    <div id="slow" class="table-wrap tall"></div>
+  </article>
+
+  <section class="grid2">
+    <article class="card">
+      <header><h2>Tokens and cost by model</h2><span class="sub">cost estimated from config pricing</span></header>
+      <div id="models" class="table-wrap"></div>
+      <p id="models-note" class="note"></p>
+    </article>
+    <article class="card">
+      <header><h2>Branches</h2></header>
+      <div id="branches" class="table-wrap"></div>
+    </article>
+  </section>
+  <footer class="foot">Timings and tool labels only; prompts, outputs and file contents are never read into the dashboard.
+    <span id="foot-gen"></span></footer>
+</main>
+<div id="tip" class="tip" role="tooltip" hidden></div>
+<script src="unreal.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

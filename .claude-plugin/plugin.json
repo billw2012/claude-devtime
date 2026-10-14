@@ -1,0 +1,11 @@
+{
+  "name": "devtime",
+  "version": "0.1.0",
+  "description": "Local dashboard of where Claude Code time and tokens go, usage alerts, and tools to cut token use",
+  "author": {
+    "name": "billw2012"
+  },
+  "homepage": "https://github.com/billw2012/claude-devtime",
+  "repository": "https://github.com/billw2012/claude-devtime",
+  "license": "MIT"
+}

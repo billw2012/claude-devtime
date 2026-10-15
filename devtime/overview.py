@@ -785,6 +785,19 @@ def large_work(data, lo, hi, budget, assign=None):
     return sorted(out, key=lambda x: x["from"])
 
 
+def guess_reset(samples):
+    """A weekly reset instant (any week of it) from the weekly drops in readings without reset times, or None. Each
+    drop puts the reset between the sample before it and the one after (mod 7 days); the end of the drop interval that
+    the most drops agree with wins (the narrowest on a tie), so a one-off early reset does not move it."""
+    spans = [(samples[i - 1][0], samples[i][0]) for i in range(1, len(samples))
+             if samples[i][2] < samples[i - 1][2] - 0.03 and samples[i][2] < 0.2 and samples[i][0] - samples[i - 1][0] < WEEK]
+    if not spans:
+        return None
+    inside = lambda c, a, b: (c - a) % WEEK <= b - a
+    score = lambda c: (sum(inside(c, a, b) for a, b in spans), -min(b - a for a, b in spans if inside(c, a, b)))
+    return max((b for _, b in spans), key=score)
+
+
 def limits(data, idx, settings, now, samples=None, org=None):
     """Plan-limit view for the whole account: weekly usage as a share of the weekly allowance, the plan's own samples,
     the 5-hour session windows, and where the week ends at the pace since the weekly reset and since the session one.
@@ -801,9 +814,12 @@ def limits(data, idx, settings, now, samples=None, org=None):
         return None
     samples = plan_samples(settings, org) if samples is None else samples
     exact = [s for s in samples if s[4]]
-    if not anchor and not exact:  # no reset instant configured and none reported by the plan
-        return None
-    a0 = exact[-1][4] if exact else iso_ts(anchor)
+    guessed = None
+    if not anchor and not exact:  # no reset instant configured and none reported by the plan: take the app history's
+        guessed = guess_reset(samples)
+        if guessed is None:
+            return None
+    a0 = exact[-1][4] if exact else guessed if guessed else iso_ts(anchor)
     end = a0 + math.ceil((now - a0) / WEEK) * WEEK
     if end <= now:
         end += WEEK
@@ -885,6 +901,7 @@ def limits(data, idx, settings, now, samples=None, org=None):
         return {"label": label, "from": t0, "perHour": rate, "atReset": share + rate * (end - now) / 3600,
                 "limitAt": hit if hit is not None and hit < end else None}
     return {"start": start, "end": end, "now": now, "step": step, "used": used, "share": share, "budget": budget,
+            "resetGuessed": bool(guessed),
             "changes": [{"t": t, "label": label} for t, label in changes() if start <= t <= end],
             "work": large_work(data, start, now, budget),
             "fit": fit, "samples": [(round(s[0]), round(s[2], 3)) for s in week if s[0] >= start],

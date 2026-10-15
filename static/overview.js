@@ -212,7 +212,7 @@ function renderTrend(o) {
 function renderLimit(o) {
   const L = o.limits, host = $("#limit");
   if (!L) {
-    host.replaceChildren(el("div", { class: "sub" }, "Needs weekly_budget_usd, and either weekly_reset or a usage reading from the desktop app (see docs/reference.md)."));
+    host.replaceChildren(el("div", { class: "sub" }, "No usage reading for this organisation yet. Run /devtime:start in a Claude Code session: it reads the plan's usage every 30 minutes. (Or set weekly_reset in devtime.toml.)"));
     $("#limit-legend").replaceChildren();
     return;
   }
@@ -309,7 +309,7 @@ function renderLimit(o) {
   const s = L.session;
   const R = L.reading;
   const read = R ? `${pct(R.share)} at ${clock(R.t)} (app${R.exact ? "" : " history"})` + (L.now - R.t > 600 ? ` · ~${pct(L.share)} now` : "") : `~${pct(L.share)} (est.)`;
-  $("#limit-sub").textContent = `${read} · resets ${when(L.end)}` + (s.start ? ` · 5-hour window ${R && R.exact && L.now - R.t < 3600 ? `${pct(R.five)} used, ` : ""}ends ${clock(s.end)}` : "");
+  $("#limit-sub").textContent = `${read} · resets ${L.resetGuessed ? "≈ " : ""}${when(L.end)}` + (s.start ? ` · 5-hour window ${R && R.exact && L.now - R.t < 3600 ? `${pct(R.five)} used, ` : ""}ends ${clock(s.end)}` : "");
   const fate = (p) => (p.limitAt ? `limit hit ${when(p.limitAt)}` : `${pct(p.atReset)} at reset`);
   const items = [[R ? "used" : "used (est.)", cUsed, L.fit ? `fitted to ${L.fit.samples} app samples: allowance ~${money(L.fit.allowance)} API-equivalent` : `weekly_budget_usd ${money(L.budget)}`],
     ...L.pace.map((p, i) => [`pace ${p.label}: ${fate(p)}`, cPace[i], `from ${when(p.from)}`]),

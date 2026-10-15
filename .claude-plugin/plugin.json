@@ -1,6 +1,6 @@
 {
   "name": "devtime",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Local dashboard of where Claude Code time and tokens go, usage alerts, and tools to cut token use",
   "author": {
     "name": "billw2012"

@@ -91,6 +91,7 @@ class Config:
         self.rules = [Rule(r) for r in base.get("rules", [])]
         self.pre_rules = [Rule(r) for r in base.get("pre_rules", [])]
         self.unreal = base.get("unreal", {})
+        self.org_names = {str(k): str(v) for k, v in (base.get("orgs") or {}).items()}  # 8-char org prefix -> name
         self.projects = []
         seen = set()
         for path in self.project_files():

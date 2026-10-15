@@ -419,7 +419,7 @@ function renderExperiments(o) {
 
 // ------------------------------------------------------------------------------------------------------------- load
 async function getJSON(url) {
-  const r = await fetch(url);
+  const r = await fetch(withOrg(url));
   if (!r.ok) throw new Error(`${url}: ${r.status}`);
   return r.json();
 }
@@ -446,6 +446,7 @@ async function refresh() {
 }
 async function init() {
   try { const th = localStorage.getItem("devtime-theme"); if (th) document.documentElement.dataset.theme = th; } catch (e) { /* private mode */ }
+  await initOrgs();
   const h = new URLSearchParams(location.hash.slice(1));
   const r = await getJSON("/api/projects");
   const names = r.projects.map((p) => p.name);

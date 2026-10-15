@@ -17,7 +17,9 @@ import pickle
 import re
 from concurrent.futures import ProcessPoolExecutor
 
-CACHE_VERSION = 6
+from . import orgs
+
+CACHE_VERSION = 7  # 7: FileState.org
 
 SHELL_TOOLS = ("Bash", "PowerShell")
 TASK_ID_RE = re.compile(r"<task-id>([^<\s]+)</task-id>")
@@ -129,6 +131,7 @@ class FileState:
         self.cwds = {}
         self.branches = {}
         self.title = None
+        self.org = None  # organisation uuid from the transcript's own credential_org record
         self.session_id = None
         self.agent_id = None
         self.entrypoint = None
@@ -169,6 +172,8 @@ class FileState:
 
     def _record(self, r):
         rtype = r.get("type")
+        if rtype == "attachment":
+            self.org = orgs.tag_of(r) or self.org
         ts_text = r.get("timestamp")
         ts = parse_ts(ts_text) if isinstance(ts_text, str) else None
         if rtype in ("user", "assistant", "system") and ts is not None:

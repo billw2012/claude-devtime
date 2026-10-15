@@ -92,7 +92,7 @@ const isOther = (kind) => !WAIT_COLORS[kind] && !(S.colors[S.project] || {})[kin
 
 // ---------------------------------------------------------------------------------------------------------- data
 async function getJSON(url) {
-  const r = await fetch(url, { cache: "no-store" });
+  const r = await fetch(withOrg(url), { cache: "no-store" });
   if (!r.ok) throw new Error(`${url}: ${r.status}`);
   return r.json();
 }
@@ -1126,6 +1126,7 @@ function updateLive(v) {
 async function init() {
   try { const th = localStorage.getItem("devtime-theme"); if (th) document.documentElement.dataset.theme = th; } catch (e) { /* ignore */ }
   readPalette();
+  await initOrgs();
   setupControls();
   setupTimeline();
   setupUnreal();

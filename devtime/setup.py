@@ -190,7 +190,7 @@ def check(projects=True):
     env = (settings or {}).get("env") or {}
     out = {
         "python": "%d.%d.%d" % sys.version_info[:3], "pythonOk": sys.version_info >= (3, 11),
-        "server": {"url": "http://%s:%d/" % (hooks.HOST, number), "answering": hooks.answering(number)},
+        "server": {"url": "http://%s:%d/" % (hooks.HOST, number), "answering": hooks.ours(number)},
         "claudeDir": claude_dir(),
         "claudeMd": {"path": claude_md_path(), "exists": text is not None, "block": m is not None,
                      "cap": cap, "fiveHourCap": five},
@@ -212,14 +212,14 @@ def ensure_server(wait_s=60):
     """Starts the server if it is not answering (detached; no-op if another start is under way) and waits for it.
     Returns (url, answering). DEVTIME_NO_SERVER_START=1 only checks (tests)."""
     hooks = load_hooks_module()
-    number = hooks.port()
-    url = "http://%s:%d/" % (hooks.HOST, number)
-    if not hooks.answering(number) and not os.environ.get("DEVTIME_NO_SERVER_START"):
+    number = hooks.port()  # this data folder's port (devtime/ports.py), not just whatever answers on 8765
+    if not hooks.ours(number) and not os.environ.get("DEVTIME_NO_SERVER_START"):
         hooks.main()
+        number = hooks.port()
         deadline = time.time() + wait_s
-        while time.time() < deadline and not hooks.answering(number):
+        while time.time() < deadline and not hooks.ours(number):
             time.sleep(1)
-    return url, hooks.answering(number)
+    return "http://%s:%d/" % (hooks.HOST, number), hooks.ours(number)
 
 
 def claude_md_status():

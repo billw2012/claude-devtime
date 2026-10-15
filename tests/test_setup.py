@@ -13,7 +13,7 @@ import unittest
 from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from devtime import setup  # noqa: E402
+from devtime import paths, setup  # noqa: E402
 
 
 class Base(unittest.TestCase):
@@ -22,6 +22,9 @@ class Base(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         patcher = mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": self.tmp.name})
         patcher.start()
+        self.addCleanup(patcher.stop)
+        patcher = mock.patch.multiple(paths, DATA=self.tmp.name, CACHE=os.path.join(self.tmp.name, "cache"))
+        patcher.start()  # the port file and caches go to the temp dir, not the real data dir
         self.addCleanup(patcher.stop)
         self.md = os.path.join(self.tmp.name, "CLAUDE.md")
 

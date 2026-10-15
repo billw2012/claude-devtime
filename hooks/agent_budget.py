@@ -40,7 +40,17 @@ from devtime import paths  # noqa: E402  (stdlib only, no heavy imports: this ru
 STATE_DIR = os.path.join(paths.CACHE, "agent_budget")
 ALERTS = os.path.join(paths.CACHE, "alerts.json")
 ALERT_FRESH_S = 1800  # an alert last seen longer ago than this is not delivered any more
-DASHBOARD = "http://127.0.0.1:8765/"
+
+
+def dashboard():
+    """The dashboard's URL: the port this data folder's server recorded (cache/port.txt), default 8765."""
+    try:
+        with open(os.path.join(paths.CACHE, "port.txt"), encoding="utf-8") as f:
+            return "http://127.0.0.1:%d/" % int(f.read().strip())
+    except (OSError, ValueError):
+        return "http://127.0.0.1:8765/"
+
+
 # agent types whose job is to wait (small context, Haiku by default): exempt from the wait rules
 WAITERS = set(filter(None, os.environ.get("DEVTIME_AGENT_WAITERS", "runner").split(",")))
 WAIT_LIMIT = float(os.environ.get("DEVTIME_AGENT_WAIT_LIMIT", 240))  # seconds; under the 5 min subagent cache life
@@ -197,7 +207,7 @@ def alert_text(items, agent_id):
                                              else "this session")
         lines.append(f"  - {who} {a['text']}. Suggest: {a['advice']}.")
     lines.append("If it can't be made cheaper, carry on; it is only reported once per level. "
-                 f"Details: {DASHBOARD}")
+                 f"Details: {dashboard()}")
     return "\n".join(lines)
 
 

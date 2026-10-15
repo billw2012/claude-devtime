@@ -12,12 +12,18 @@
 Stdlib only and cheap to import: the hook scripts import it. Directories are created lazily with ensure().
 """
 
+import hashlib
 import os
 
 DATA = os.path.abspath(os.path.expanduser(os.environ.get("DEVTIME_HOME") or os.path.join("~", ".claude", "devtime")))
 CACHE = os.path.join(DATA, "cache")
 LOGS = os.path.join(DATA, "logs")
 USER_CONFIG = os.path.join(DATA, "config")
+
+
+def home_id():
+    """Identifies this data folder (first 12 hex of the SHA-1 of its absolute path): a server is ours if it reports it."""
+    return hashlib.sha1(os.path.normcase(os.path.abspath(DATA)).encode("utf-8")).hexdigest()[:12]
 
 
 def ensure(path):

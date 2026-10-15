@@ -24,17 +24,21 @@ import re
 import statistics
 import time
 
-from . import paths
+from . import orgs, paths
 
 NOTES = os.path.join(paths.CACHE, "review_notes.jsonl")
 NOTE_S = 3 * 3600  # a note is delivered if its session makes a tool call within this long
 
 
-def record_note(session, text, path=NOTES):
-    """A periodic reviewer's note for a main session (by title); check() turns it into an alert for that session."""
+def record_note(session, text, path=NOTES, org=None):
+    """A periodic reviewer's note for a main session (by title, in an org if given: id or prefix); check() turns it
+    into an alert for that session."""
     os.makedirs(os.path.dirname(path), exist_ok=True)
+    row = {"t": round(time.time(), 1), "session": session, "text": text.strip()}
+    if org:
+        row["org"] = org
     with open(path, "a", encoding="utf-8") as f:
-        f.write(json.dumps({"t": round(time.time(), 1), "session": session, "text": text.strip()}) + "\n")
+        f.write(json.dumps(row) + "\n")
     return f"noted for '{session}'"
 
 
@@ -100,7 +104,8 @@ def fmt_money(x):
 
 
 def check(data, config, now=None):
-    """[{key, level, kind, project, session, agent, owner, title, text, advice, value, since}]"""
+    """[{key, level, kind, org, project, session, agent, owner, title, text, advice, value, since}]. Alerts carry
+    their transcript's org; the machine-burn total is per org so that no org sees another's spending."""
     now = now or time.time()
     th = dict(DEFAULTS, **(config.settings.get("alerts") or {}))
     iv, tok, trs, models = data["iv"], data["tok"], data["transcripts"], data["models"]
@@ -124,7 +129,7 @@ def check(data, config, now=None):
     ab_sessions = {tr.get("session") for tr in trs
                    if tr["role"] != "main" and tr["end"] >= now - 86400 and AB.match(tr.get("description") or "")}
     out = []
-    machine = 0.0
+    machine = {}
     seen = set()
     # a forked session copies its subagents' transcripts (same agent id, no description): keep the original
     for t, rows in sorted(recent.items(), key=lambda kv: (not trs[kv[0]].get("description"), -trs[kv[0]]["end"])):
@@ -133,14 +138,14 @@ def check(data, config, now=None):
             continue
         seen.add(tr["id"])
         rows.sort()
-        machine += sum(r[1] for r in rows)
+        machine[tr.get("org")] = machine.get(tr.get("org"), 0.0) + sum(r[1] for r in rows)
         if now - rows[-1][0] > th["live_s"]:
             continue
         sub = tr["role"] != "main"
         name = (tr.get("description") or tr.get("title") or tr["id"][:8]) if sub else (tr.get("title") or "main")
         model = models[rows[-1][4]].replace("claude-", "") if isinstance(rows[-1][4], int) else str(rows[-1][4])
-        base = {"project": tr.get("project"), "session": tr.get("session"), "agent": tr["id"] if sub else None,
-                "owner": name, "model": model, "role": "subagent" if sub else "main"}
+        base = {"org": tr.get("org"), "project": tr.get("project"), "session": tr.get("session"),
+                "agent": tr["id"] if sub else None, "owner": name, "model": model, "role": "subagent" if sub else "main"}
 
         def add(kind, level, value, text):
             out.append(dict(base, key=f"{tr['id']}:{kind}:{level}", kind=kind, level=level, value=round(value, 2),
@@ -199,21 +204,26 @@ def check(data, config, now=None):
             mains[tr["title"]] = tr
     for n in notes(now):
         tr = mains.get(n.get("session"))
+        if n.get("org"):  # a note for an org only reaches that org's session of the title
+            tr = max((m for m in trs if m["role"] == "main" and m.get("title") == n.get("session")
+                      and orgs.matches(m.get("org") or "", n["org"])), key=lambda m: m["end"], default=None)
         if not tr:
             continue
         digest = hashlib.sha1(f"{n['t']}:{n['text']}".encode()).hexdigest()[:10]
         out.append({"key": f"review:{tr['session']}:{digest}", "kind": "usage review", "level": 1, "value": 0,
-                    "project": tr.get("project"), "session": tr.get("session"), "agent": None,
+                    "org": tr.get("org"), "project": tr.get("project"), "session": tr.get("session"), "agent": None,
                     "owner": n["session"], "model": "", "role": "main",
                     "title": f"session '{n['session']}': usage review", "text": f"has a usage review note: {n['text']}",
                     "advice": "act on it at the next natural break if it holds; the reviewer only sees numbers and "
                               "descriptions, so ignore it if it misreads the work", "since": n["t"]})
-    if machine >= th["machine_burn"]:
-        out.append({"key": f"machine:burn:{int(machine // th['machine_burn'])}", "kind": "machine burn",
-                    "level": int(machine // th["machine_burn"]), "value": round(machine, 2), "project": None,
-                    "session": None, "agent": None, "owner": "all sessions", "model": "", "role": "machine",
-                    "title": "all sessions: machine burn", "text": f"spent {fmt_money(machine)} in the last hour",
-                    "advice": "too many agents at once; limit to 2-3 across all sessions", "since": now})
+    for org, spent in sorted(machine.items(), key=lambda kv: str(kv[0])):
+        if spent >= th["machine_burn"]:
+            level = int(spent // th["machine_burn"])
+            out.append({"key": f"machine:{(org or 'unknown')[:8]}:burn:{level}", "kind": "machine burn", "level": level,
+                        "value": round(spent, 2), "org": org, "project": None, "session": None, "agent": None,
+                        "owner": "all sessions", "model": "", "role": "machine",
+                        "title": "all sessions: machine burn", "text": f"spent {fmt_money(spent)} in the last hour",
+                        "advice": "too many agents at once; limit to 2-3 across all sessions", "since": now})
     return out
 
 
@@ -248,8 +258,10 @@ class Alerts:
         self.save(now)
         return current
 
-    def list(self):
-        return sorted(self.items.values(), key=lambda a: (not a["active"], -a["last"], -a["value"]))
+    def list(self, org=None):
+        """All alerts, or (org = a full org id) only that org's. Alerts saved before orgs existed have none."""
+        items = self.items.values() if org is None else [a for a in self.items.values() if a.get("org") == org]
+        return sorted(items, key=lambda a: (not a["active"], -a["last"], -a["value"]))
 
     def save(self, now):
         os.makedirs(os.path.dirname(self.path), exist_ok=True)

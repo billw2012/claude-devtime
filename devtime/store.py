@@ -5,7 +5,7 @@ import pickle
 import threading
 import time
 
-from . import alerts, analyze, scan, unreal
+from . import alerts, analyze, orgs, scan, unreal
 from .config import Config
 
 
@@ -22,6 +22,7 @@ class Store:
         self.blocks = self._load_blocks()  # per-transcript rows, so a restart does not re-classify everything
         self.harvester = unreal.Harvester(self.config)
         self.last_save = 0.0
+        self.desktop_orgs = {}
         self.save_every = 60.0
         self.alerts = alerts.Alerts(os.path.join(self.config.path("cache_dir"), "alerts.json"))
 
@@ -49,6 +50,9 @@ class Store:
                 force |= self.harvester.refresh()
             except Exception as error:  # a bad log must not stop the dashboard
                 self.log("unreal logs:", repr(error))
+            desktop_orgs = orgs.desktop_index(s)
+            if desktop_orgs != self.desktop_orgs:  # a session's org became known (or changed)
+                force = True
             t1 = time.time()
             if changed or force or self.data is None:
                 if changed and time.time() - self.last_save > self.save_every:
@@ -58,8 +62,9 @@ class Store:
                 else:
                     save_blocks = force and time.time() - self.last_save > self.save_every
                 desktop = scan.desktop_sessions(s.get("desktop_session_dirs", []))
+                self.desktop_orgs = desktop_orgs
                 builder = analyze.Builder(self.config, self.cache, discovered, desktop, self.blocks,
-                                       self.harvester.runs)
+                                          self.harvester.runs, desktop_orgs)
                 self.data = builder.build()
                 self.blocks = builder.blocks
                 if save_blocks or not os.path.exists(self._blocks_path()):
@@ -97,15 +102,55 @@ class Store:
             pickle.dump(self.blocks, handle, protocol=pickle.HIGHEST_PROTOCOL)
         os.replace(tmp, self._blocks_path())
 
-    def slice(self, project):
-        key = project or "*"
+    def slice(self, project, org=None):
+        """The dataset of one project and / or one org (org = a full org id; None = every org, which only the
+        callers that checked allow_all_orgs may use)."""
+        key = (project or "*", org)
         with self.lock:
             data, version = self.data, self.version
             cached = self.slices.get(key)
             if cached and cached[0] == version:
                 return cached[1]
-        out = analyze.subset(data, None if key == "*" else key)
+        if org is not None:
+            base = self.slice("*", org) if key[0] != "*" else None
+            if base is None:
+                base = analyze.subset(data, None, org)
+                base["projects"] = analyze.projects_summary(base)
+                base["defaultProject"] = analyze.default_project(base, self.config.settings.get("default_project"))
+            out = base if key[0] == "*" else analyze.subset(base, key[0])
+        else:
+            out = analyze.subset(data, None if key[0] == "*" else key[0])
         with self.lock:
             if self.version == version:
                 self.slices[key] = (version, out)
         return out
+
+    # ---- organisations ----
+    def org_list(self):
+        """[{id (first 8 chars), name, sessions, last, full}] most recently active first, "unknown" last."""
+        agg = {}
+        for t in (self.data or {}).get("transcripts", []):
+            e = agg.setdefault(t.get("org") or orgs.UNKNOWN, {"sessions": 0, "last": 0.0})
+            e["sessions"] += t["role"] == "main"
+            e["last"] = max(e["last"], t["end"])
+        out = [{"id": o[:8], "name": self.config.org_names.get(o[:8], ""), "sessions": e["sessions"], "last": e["last"],
+                "full": o} for o, e in agg.items()]
+        return sorted(out, key=lambda e: (e["full"] == orgs.UNKNOWN, -e["last"]))
+
+    def default_org(self):
+        """The org of the most recently active transcript (a known org if there is one)."""
+        found = self.org_list()
+        return found[0]["full"] if found else orgs.UNKNOWN
+
+    def resolve_org(self, spec):
+        """spec (an org id, a short prefix, "all" or empty = the default) -> the full id, or None for all orgs.
+        Raises orgs.OrgError (403 when all is not allowed, 404, 400)."""
+        known = {e["full"] for e in self.org_list()}
+        return orgs.pick(known, spec, self.default_org(), bool(self.config.settings.get("allow_all_orgs")))
+
+    def org_of_session(self, session_id):
+        """The org of a CLI session id (its transcript's, else the desktop index's), or None if unknown."""
+        for t in (self.data or {}).get("transcripts", []):
+            if t["role"] == "main" and t.get("session") == session_id and t.get("org") != orgs.UNKNOWN:
+                return t["org"]
+        return orgs.desktop_index(self.config.settings).get(session_id)

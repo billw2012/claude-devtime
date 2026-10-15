@@ -44,7 +44,7 @@ class Tick(Base):
         with mock.patch.object(tick.setup, "ensure_server", return_value=("http://127.0.0.1:1/", False)), \
                 mock.patch.object(tick, "tick_numbers", return_value=self.numbers):
             out = json.loads(self.capture(tick.tick))
-        self.assertEqual(set(out), {"url", "reading", "labels", "review", "alerts", "cap", "fiveHourCap", "setup", "server"})
+        self.assertEqual(set(out), {"url", "org", "reading", "labels", "review", "alerts", "cap", "fiveHourCap", "setup", "server"})
         self.assertEqual(out["reading"]["weekly"], 41.0)
         self.assertEqual(out["labels"], 3)
         self.assertEqual(out["review"], {"due": True, "lastAt": None})
@@ -86,7 +86,7 @@ class Review(Base):
             self.capture(tick.review_done, "line %d" % i)
         with mock.patch.object(tick, "watch_summary", return_value={"mains": []}) as w:
             out = json.loads(self.capture(tick.review_context, 2.0))
-        w.assert_called_once_with(2.0)
+        w.assert_called_once_with(2.0, None)
         self.assertEqual(out["watch"]["mains"], [])
         self.assertEqual(out["watch"]["subagents"], [])
         self.assertEqual(len(out["reviewLog"]), tick.LOG_TAIL)

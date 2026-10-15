@@ -13,6 +13,11 @@ desktop_session_dirs = ["~/AppData/Roaming/Claude/claude-code-sessions"]
 idle_gap_s = 30           # uncovered gaps longer than this are idle / waiting; shorter ones are harness overhead
 host = "127.0.0.1"
 port = 8765
+# Organisations: one account can be signed into several in the desktop app; they share ~/.claude, DevTime keeps their
+# data apart (a transcript's org: its credential_org record, else the desktop app's session index, else its parent's).
+# The dashboard and every API call show one org at a time (the most recently active by default).
+allow_all_orgs = false    # true allows org=all (all orgs mixed together) in the API
+# desktop_dir = "~/AppData/Roaming/Claude"  # the desktop app's data folder; default per OS (also env DEVTIME_DESKTOP_DIR)
 poll_s = 10               # server re-scans transcripts this often
 # The project the dashboard opens on; unset = the one with the most cost in the last 7 days.
 # default_project = "MyProject"
@@ -36,6 +41,10 @@ context = 300000          # subagent context per call (median of its last 5 requ
 burn_sub = 15.0           # $ in the last 30 min
 burn_main = 25.0
 machine_burn = 80.0       # $ in the last hour, all sessions (dashboard only)
+
+# Names for the org picker: the first 8 characters of an org id -> name (e.g. from /api/orgs).
+# [orgs]
+# "1a2b3c4d" = "Personal"
 
 # USD per million tokens. cache_write_* are the 5-minute and 1-hour prompt-cache writes. Models are matched by
 # prefix, longest first, so "claude-opus-4" covers every Opus 4.x without its own row.

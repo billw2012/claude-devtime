@@ -24,7 +24,7 @@ import os
 import re
 import time
 
-from . import unreal
+from . import orgs, unreal
 
 HOUR = 3600.0
 _RIDS = {}  # path -> (offset, {request id: time}): request ids per transcript, for fork / copy de-duplication
@@ -59,7 +59,7 @@ def auto_project_name(cwd, folder):
 
 
 class Builder:
-    def __init__(self, config, cache, discovered, desktop, blocks=None, runs=None):
+    def __init__(self, config, cache, discovered, desktop, blocks=None, runs=None, desktop_orgs=None):
         self.blocks = blocks or {}  # path -> (key, rows): per-transcript results reused while the file is unchanged
         self.runs = runs or {}  # Unreal Editor runs from their logs (devtime.unreal)
         self.config = config
@@ -71,6 +71,7 @@ class Builder:
         self.cache = cache
         self.discovered = discovered
         self.desktop = desktop
+        self.desktop_orgs = desktop_orgs or {}  # session id -> org uuid (orgs.desktop_index)
         self.idle_gap = float(config.settings.get("idle_gap_s", 30))
         self.kinds = Interner()
         self.labels = Interner()
@@ -171,6 +172,7 @@ class Builder:
             pname = project.name if project else auto_project_name(desk.get("originCwd") or cwd, d["folder"])
             title = desk.get("title") or d.get("title") or st.title or d["session"][:8]
             desc = ""
+            org = orgs.resolve(st.org, d["session"], self.desktop_orgs)
         else:
             parent_entry = mains.get((d["folder"], d["session"]))
             parent = info.get(parent_entry[0]["path"]) if parent_entry else None
@@ -179,11 +181,12 @@ class Builder:
             title = parent["title"] if parent else d["session"][:8]
             meta = d.get("meta") or {}
             desc = meta.get("description") or d.get("agent", "")
+            org = st.org or (parent["org"] if parent else None) or orgs.resolve(None, d["session"], self.desktop_orgs)
         idx = len(self.transcripts)
         meta = d.get("meta") or {}
         t = {
             "idx": idx, "id": d.get("agent") or d["session"], "role": d["role"], "session": d["session"],
-            "parent": parent["idx"] if parent else None, "project": pname, "projectObj": project, "title": title,
+            "parent": parent["idx"] if parent else None, "org": org, "project": pname, "projectObj": project, "title": title,
             "description": desc, "agentType": meta.get("agentType"), "shape": meta.get("requestShape"),
             "toolUseId": meta.get("toolUseId"), "workflow": d.get("workflow"), "phase": meta.get("workflowPhase"),
             "cwd": cwd, "branch": branch, "start": st.first_ts, "end": st.last_ts,
@@ -613,11 +616,15 @@ def split_hours(a, b, weight):
     return out
 
 
-def subset(data, project):
-    """The dataset restricted to one project (transcripts, their intervals and token rows), re-indexed."""
+def subset(data, project, org=None):
+    """The dataset restricted to one project and / or one organisation (transcripts, their intervals and token rows),
+    re-indexed. Unreal runs are kept for an org only when they are linked to one of its transcripts."""
     if not project or project == "*":
+        project = None
+    if not project and org is None:
         return data
-    keep = [t for t in data["transcripts"] if t["project"] == project]
+    keep = [t for t in data["transcripts"] if (not project or t["project"] == project)
+            and (org is None or t.get("org") == org)]
     remap = {t["idx"]: i for i, t in enumerate(keep)}
     transcripts = []
     for i, t in enumerate(keep):
@@ -636,12 +643,18 @@ def subset(data, project):
     new_tok["i"] = [rowmap[n] for n in new_tok["i"]]
     hours = [[rowmap[n], h, s] for n, h, s in data["hours"] if n in rowmap]
     out = dict(data)
-    out.update(transcripts=transcripts, iv=new_iv, tok=new_tok, hours=hours, project=project)
+    out.update(transcripts=transcripts, iv=new_iv, tok=new_tok, hours=hours)
+    if project:
+        out["project"] = project
+    if org is not None:
+        out["org"] = org
     out["launchScripts"] = {str(rowmap[int(n)]): s for n, s in data.get("launchScripts", {}).items()
                             if int(n) in rowmap}
     ue = data.get("ue")
     if ue:
-        keep_r = [r for r, p in enumerate(ue["runs"]["project"]) if p == project]
+        runs_t = ue["runs"]["t"]
+        keep_r = [r for r, p in enumerate(ue["runs"]["project"]) if (not project or p == project)
+                  and (org is None or runs_t[r] in remap)]
         rmap = {r: i for i, r in enumerate(keep_r)}
         runs = {k: [col[r] for r in keep_r] for k, col in ue["runs"].items()}
         runs["iv"] = [rowmap.get(n, -1) if n >= 0 else -1 for n in runs["iv"]]

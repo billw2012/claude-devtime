@@ -37,7 +37,8 @@ If the plugin's `sonnet-default-coding` is listed, call it a suggestion to A/B, 
 ## 3. Choose
 
 AskUserQuestion, multiSelect: the not-yet-applied catalogue items worth doing (largest estimate first, at most 4 per
-question; use a second question for more). Then, per chosen item, ask: apply globally now, or test it first as an A/B
+question; use a second question for more). The options are the items only: no "None", "Skip" or "All" option (ticking
+nothing means none; the widget's own custom answer covers anything else). Then, per chosen item, ask: apply globally now, or test it first as an A/B
 (tell the user to run `/devtime:ab <id>` afterwards for those; do not apply them here). Items whose only action is a
 `note` (e.g. `weekly-cap`) have nothing to write: tell the user to run `/devtime:start`.
 
@@ -66,7 +67,8 @@ not open and compare the weeks. Re-run `/devtime:optimize` in a week to see the 
 1. `python -m devtime optimize list`: each item's state (`devtime` = installed and tagged, `adopted`, `manual` = the
    user's own text, not removable until adopted) and a `remove:` line saying exactly what removing it would do.
 2. Show the installed ones as a short list (title, where: CLAUDE.md / settings.json) and ask which to remove
-   (AskUserQuestion, multiSelect, with "All of them" as an option).
+   (AskUserQuestion, multiSelect, the items only: no "None" or "All" option; if every item is ticked, use
+   `remove all`).
 3. One item: `optimize remove <id> --dry-run`; all: `optimize remove all --dry-run` (every devtime block, every
    recorded setting and the Usage tracking block from /devtime:start). Show the diff briefly; run without `--dry-run`
    on yes. Report each `report` line in plain words (removed, restored to the earlier value, left alone because

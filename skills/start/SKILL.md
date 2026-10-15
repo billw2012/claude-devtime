@@ -31,6 +31,8 @@ If the args are exactly `tick`, do only the **pass** below (no setup, no browser
 6. First run only (this session has no devtime loop yet): start the loop by invoking the `loop` skill with args
    `30m /devtime:start tick`. Tell the user the loop lives in this session (keep it open; a cheap model such as
    Sonnet or Haiku is fine for it).
+7. First run only, last: invoke the `devtime:optimize` skill (Skill tool; `optimize` if the scoped name is not
+   found) to measure this machine's usage and offer the optimizations; follow it through to the end.
 
 ## The pass
 

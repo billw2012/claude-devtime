@@ -146,6 +146,134 @@ class ApplyRemove(Base):
         self.assertRegex(self.run_cli("optimize", "list"), r"scripts-first\s+manual")
 
 
+class Ledger(Base):
+    KEY = "CLAUDE_CODE_AUTO_COMPACT_WINDOW"
+    DOC = ("# Mine\n\nIntro.\n\n## Rules\nBe brief.\n\n### Sub\nnested\n\n```\n## not a heading\n```\n\n"
+           "## Other\nKeep.\n")
+
+    def ledger(self):
+        path = os.path.join(self.dir, "config", "installed.json")
+        return json.loads(self.read(path)) if os.path.exists(path) else None
+
+    def env(self):
+        return json.loads(self.read(self.settings)).get("env")
+
+    def test_restores_prior_different_value(self):
+        original = json.dumps({"env": {self.KEY: "200000", "FOO": "1"}}, indent=2) + "\n"
+        self.write(self.settings, original)
+        self.run_cli("optimize", "apply", "autocompact-400k")
+        self.assertEqual(self.env()[self.KEY], "400000")
+        entry = self.ledger()["items"][0]
+        self.assertEqual(entry["id"], "autocompact-400k")
+        self.assertEqual(entry["settings"], [{"key": "env." + self.KEY, "before": "200000", "after": "400000"}])
+        self.assertTrue(entry["at"])
+        out = self.run_cli("optimize", "remove", "autocompact-400k")
+        self.assertIn("restored", out)
+        self.assertEqual(self.read(self.settings), original)
+        self.assertEqual(self.ledger()["items"], [])
+
+    def test_absent_key_is_deleted_and_env_dropped(self):
+        self.write(self.settings, "{}\n")
+        self.run_cli("optimize", "apply", "autocompact-400k")
+        self.assertIsNone(self.ledger()["items"][0]["settings"][0]["before"])
+        self.run_cli("optimize", "remove", "autocompact-400k")
+        self.assertEqual(json.loads(self.read(self.settings)), {})
+
+    def test_already_set_by_user_stays(self):
+        original = json.dumps({"env": {self.KEY: "400000"}}) + "\n"
+        self.write(self.settings, original)
+        out = self.run_cli("optimize", "apply", "autocompact-400k")
+        self.assertIn("already set by you", out)
+        self.assertEqual(self.ledger()["items"][0]["settings"][0]["before"], "400000")
+        self.assertFalse(os.path.exists(self.changes))  # nothing changed, no marker
+        out = self.run_cli("optimize", "remove", "autocompact-400k")
+        self.assertIn("already set by you", out)
+        self.assertEqual(self.env(), {self.KEY: "400000"})
+        self.assertEqual(self.ledger()["items"], [])
+
+    def test_changed_since_install_is_left_alone(self):
+        self.run_cli("optimize", "apply", "autocompact-400k")
+        self.write(self.settings, json.dumps({"env": {self.KEY: "300000"}}))
+        out = self.run_cli("optimize", "remove", "autocompact-400k")
+        self.assertIn("changed since install, left alone", out)
+        self.assertEqual(self.env(), {self.KEY: "300000"})
+        self.assertEqual(self.ledger()["items"], [])
+
+    def test_no_ledger_entry_leaves_settings(self):
+        self.write(self.settings, json.dumps({"env": {self.KEY: "400000"}}))
+        out = self.run_cli("optimize", "remove", "autocompact-400k")
+        self.assertIn("no install record", out)
+        self.assertEqual(self.env(), {self.KEY: "400000"})
+
+    def test_apply_twice_keeps_first_before(self):
+        self.write(self.settings, json.dumps({"env": {self.KEY: "1"}}))
+        self.run_cli("optimize", "apply", "autocompact-400k")
+        self.run_cli("optimize", "apply", "autocompact-400k")
+        self.assertEqual(self.ledger()["items"][0]["settings"][0]["before"], "1")
+        self.run_cli("optimize", "remove", "autocompact-400k")
+        self.assertEqual(self.env(), {self.KEY: "1"})
+
+    def test_adopt_wraps_section_with_nested_headings(self):
+        self.write(self.md, self.DOC)
+        out = self.run_cli("optimize", "adopt", "my-rules", "--heading", "Rules", "--dry-run")
+        self.assertIn("+<!-- devtime:opt:my-rules -->", out)
+        self.assertEqual(self.read(self.md), self.DOC)
+        self.assertIsNone(self.ledger())
+        self.run_cli("optimize", "adopt", "my-rules", "--heading", "Rules")
+        expected = (self.DOC.replace("## Rules", "<!-- devtime:opt:my-rules -->\n## Rules")
+                    .replace("```\n\n## Other", "```\n<!-- devtime:opt-end:my-rules -->\n\n## Other"))
+        self.assertEqual(self.read(self.md), expected)
+        entry = self.ledger()["items"][0]
+        self.assertEqual((entry["id"], entry["adopted"], entry["heading"]), ("my-rules", True, "Rules"))
+        self.assertRegex(self.run_cli("optimize", "list"), r"my-rules\s+adopted")
+        self.run_cli("optimize", "remove", "my-rules")
+        self.assertEqual(self.read(self.md), "# Mine\n\nIntro.\n\n## Other\nKeep.\n")
+        self.assertEqual(self.ledger()["items"], [])
+
+    def test_adopt_refusals(self):
+        self.write(self.md, self.DOC)
+        with self.assertRaises(SystemExit):
+            self.run_cli("optimize", "adopt", "x", "--heading", "Missing")
+        with self.assertRaises(SystemExit):
+            self.run_cli("optimize", "adopt", "Bad Id", "--heading", "Rules")
+        self.run_cli("optimize", "adopt", "my-rules", "--heading", "Rules")
+        with self.assertRaises(SystemExit):
+            self.run_cli("optimize", "adopt", "other", "--heading", "Sub")  # already inside a devtime block
+        with self.assertRaises(SystemExit):
+            self.run_cli("optimize", "adopt", "other", "--heading", "Mine")  # contains a devtime block
+
+    def test_adopt_catalogue_id_at_end_of_file(self):
+        self.write(self.md, "# A\ntext\n\n## Scripts\nuse scripts")
+        self.run_cli("optimize", "adopt", "scripts-first", "--heading", "## Scripts")
+        self.assertRegex(self.run_cli("optimize", "list"), r"scripts-first\s+adopted")
+        self.run_cli("optimize", "remove", "scripts-first")
+        self.assertEqual(self.read(self.md), "# A\ntext\n")
+
+    def test_remove_all(self):
+        original_md = "# Mine\n\n## Hand\nwritten\n"
+        self.write(self.md, original_md)
+        self.write(self.settings, json.dumps({"env": {self.KEY: "200000"}}, indent=2) + "\n")
+        original_settings = self.read(self.settings)
+        self.run_cli("optimize", "apply", "slim-agents")
+        self.run_cli("optimize", "apply", "autocompact-400k")
+        self.run_cli("setup", "claude-md", "--cap", "85")
+        self.write(self.md, self.read(self.md) + "\n## Adopt me\nstuff\n")
+        self.run_cli("optimize", "adopt", "custom-one", "--heading", "Adopt me")
+        text = self.read(self.md)
+        for marker in ("devtime:opt:slim-agents", setup.START, "devtime:opt:custom-one"):
+            self.assertIn(marker, text)
+        self.assertRegex(self.run_cli("optimize", "list"), r"custom-one\s+adopted")
+        out = self.run_cli("optimize", "remove", "all", "--dry-run")
+        self.assertIn("-<!-- devtime:opt:slim-agents -->", out)
+        self.assertEqual(self.read(self.md), text)  # a dry run changes nothing
+        out = self.run_cli("optimize", "remove", "all")
+        self.assertIn("Removed all devtime optimizations", out)
+        self.assertEqual(self.read(self.md), original_md)
+        self.assertEqual(self.read(self.settings), original_settings)
+        self.assertEqual(self.ledger()["items"], [])
+        self.assertIn("Removed all devtime optimizations", self.read(self.changes))
+
+
 class RealData(unittest.TestCase):
     """Uses the machine's own transcripts and cache (read-only apart from the cache), a temp Claude dir for the files."""
 

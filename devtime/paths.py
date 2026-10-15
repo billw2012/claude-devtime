@@ -3,7 +3,8 @@
     DATA         DEVTIME_HOME, else ~/.claude/devtime
     CACHE        DATA/cache        transcript caches, alerts, plan samples, server log ...
     LOGS         DATA/logs         archived Unreal logs
-    USER_CONFIG  DATA/config       devtime.toml (setting overrides), projects/*.toml, changes.toml, experiments.toml
+    USER_CONFIG  DATA/config       devtime.toml (setting overrides), projects/*.toml, changes.toml, experiments.toml,
+                 installed.json (what optimize changed, so remove can undo it)
     DATA/plugin_root.txt, DATA/devtime.py   the plugin's current install path and a launcher that runs
                  `python -m devtime <args>` from it (text in CLAUDE.md can't use ${CLAUDE_PLUGIN_ROOT}); written by
                  hooks/ensure_server.py at every session start

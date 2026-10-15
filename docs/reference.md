@@ -62,10 +62,16 @@ loops. Each item has the summary, the metric that drives it and what was measure
   Sonnet prices), concurrent agents, recurring failures, and the catalogue ranked by `estWeeklyUsd`
   (`{id, applied, by, estWeeklyUsd, why}`). Estimates are upper bounds ("if every such request were fixed") scaled
   to a week and overlap (hand-off and auto-compact, runner and polling); applied items show what is still being lost.
-- `python -m devtime optimize list | apply <id> [--dry-run] | remove <id>`: `claude_md` actions write a block between
+- `python -m devtime optimize list | apply <id> [--dry-run] | remove <id>|all [--dry-run] | adopt <id> --heading H [--dry-run]`: `claude_md` actions write a block between
   `<!-- devtime:opt:<id> -->` and `<!-- devtime:opt-end:<id> -->` in `~/.claude/CLAUDE.md` (the rest is untouched),
   `settings_env` actions set a key of `env` in `settings.json` (other keys and the indent are kept, `settings.json.bak`
-  is written first), `note` actions are manual steps. Applying or removing records a change marker ("Applied <title>")
+  is written first), `note` actions are manual steps. Every `settings.json` change is recorded in the install ledger
+  `<data dir>/config/installed.json` as `{key, before, after}`: `remove` puts `before` back (deletes the key if it was
+  absent) when the value is still `after`, leaves a value you changed since, and leaves settings alone when there is no
+  record. `remove all` removes every opt block, every recorded settings change and the `devtime:start` block.
+  `adopt <id> --heading H` wraps your own CLAUDE.md section (heading to the next heading of the same or higher level)
+  in the tags so it becomes removable. `list` shows each block's state (devtime / adopted / manual / partly) and what
+  remove would do. Applying or removing records a change marker ("Applied <title>")
   that the dashboard's weekly chart draws, so the effect is visible. A catalogue item counts as applied when its block
   or env entry exists, or (`by: manual`) when CLAUDE.md already says it, matched by the item's `detect` regex.
   `CLAUDE_CONFIG_DIR` overrides `~/.claude`.

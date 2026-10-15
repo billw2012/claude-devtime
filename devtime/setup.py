@@ -101,6 +101,8 @@ def remove_block(text, block_re):
     head, tail = text[:m.start()], text[m.end():]
     if tail.startswith(eol):
         tail = tail[len(eol):]
+        if not head and tail.startswith(eol):  # first thing in the file: the blank line after it goes too
+            tail = tail[len(eol):]
     if head.endswith(eol * 2):
         head = head[:-len(eol)]
     return head + tail, True

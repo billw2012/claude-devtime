@@ -37,7 +37,13 @@ question; use a second question for more). Then, per chosen item, ask: apply glo
 
 For each item chosen for global use: `python -m devtime optimize apply <id> --dry-run`, show the diff briefly (the
 CLAUDE.md block or the settings.json `env` line; settings.json gets a `.bak`), and on yes run it without `--dry-run`.
-A change marker "Applied <title>" is recorded automatically. `python -m devtime optimize remove <id>` undoes one.
+A change marker "Applied <title>" is recorded automatically. `python -m devtime optimize remove <id> [--dry-run]`
+undoes one and restores what `settings.json` held before (the install ledger `<data dir>/config/installed.json`
+records it; a value the user changed since is left alone). `optimize remove all [--dry-run]` takes out every devtime
+block, every recorded settings change and the `/devtime:start` block. If the user already wrote an item by hand
+(`by: manual`) or has their own CLAUDE.md section they want removable, `optimize adopt <id> --heading "<heading text>"
+[--dry-run]` wraps it in the tags (custom ids: lowercase letters, digits, dashes). `optimize list` shows each block's
+state and what remove would do.
 CLAUDE.md edits only reach sessions started afterwards; `settings.json` env changes need a restart of Claude Code.
 
 ## 5. Finish

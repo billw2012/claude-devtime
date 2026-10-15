@@ -1,17 +1,24 @@
-"""`python -m devtime analyze` and `optimize list | apply | remove`: measure usage, rank the catalogue, apply items.
+"""`python -m devtime analyze` and `optimize list | apply | remove | adopt`: measure usage, rank the catalogue, apply items.
 
-    analyze [--days 7]               compact JSON: metrics (weekly $ estimates) and the catalogue ranked by estimate
-    optimize list                    the catalogue, briefly
-    optimize apply <id> [--dry-run]  write the item's CLAUDE.md block / settings.json env entry (diffs only with --dry-run)
-    optimize remove <id>             take them out again
+    analyze [--days 7]                 compact JSON: metrics (weekly $ estimates) and the catalogue ranked by estimate
+    optimize list                      each catalogue item and adopted / custom block: state and what remove would do
+    optimize apply <id> [--dry-run]    write the item's CLAUDE.md block / settings.json env entry (diffs only with --dry-run)
+    optimize remove <id> [--dry-run]   take them out again; settings.json values go back to what they were before
+    optimize remove all [--dry-run]    every opt block, every recorded settings change and the devtime:start block
+    optimize adopt <id> --heading H [--dry-run]
+                                       wrap the hand-written CLAUDE.md section under heading H in the tags for <id>
+                                       (a catalogue id or a custom one: lowercase letters, digits, dashes)
 
 The catalogue is optimizations/catalogue.toml. CLAUDE.md blocks sit between <!-- devtime:opt:<id> --> and
-<!-- devtime:opt-end:<id> -->; settings.json is copied to settings.json.bak before it is written. Applying or removing
-records a change marker for the dashboard's weekly chart. Estimates are upper bounds ("if every such request were
-fixed"), scaled to a week.
+<!-- devtime:opt-end:<id> -->; settings.json is copied to settings.json.bak before it is written. The install ledger
+<data dir>/config/installed.json records each settings change as {key, before, after} (before null = it was absent) and
+each adopted section: remove restores `before` if the value is still `after`, leaves a value you changed since, and
+leaves settings alone when there is no record. Applying or removing records a change marker for the dashboard's weekly
+chart. Estimates are upper bounds ("if every such request were fixed"), scaled to a week.
 """
 
 import collections
+import datetime
 import difflib
 import json
 import os
@@ -21,7 +28,7 @@ import statistics
 import time
 import tomllib
 
-from . import setup
+from . import paths, setup
 
 ROOT = setup.ROOT
 CATALOGUE = os.path.join(ROOT, "optimizations", "catalogue.toml")
@@ -101,6 +108,81 @@ def applied_state(item, claude_md, settings):
 
 
 # ---------------------------------------------------------------------------------------------------------------------
+# Install ledger: what settings.json held before an apply, and which CLAUDE.md sections were adopted
+
+
+ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+ANY_OPT_RE = re.compile(r"<!-- devtime:opt:([a-z0-9][a-z0-9-]*) -->.*?<!-- devtime:opt-end:\1 -->", re.S)
+MISSING = object()
+
+
+def ledger_path():
+    return os.path.join(paths.DATA, "config", "installed.json")
+
+
+def read_ledger():
+    """(ledger dict {"items": [...]}, raw text or None)."""
+    raw = setup.read_text(ledger_path())
+    if raw is None:
+        return {"items": []}, None
+    try:
+        data = json.loads(raw)
+        if not isinstance(data, dict) or not isinstance(data.get("items", []), list):
+            raise ValueError("not a ledger")
+    except ValueError as error:
+        raise SystemExit("%s cannot be read (%s); fix or delete it" % (ledger_path(), error))
+    data.setdefault("items", [])
+    return data, raw
+
+
+def ledger_entry(ledger, item_id):
+    return next((e for e in ledger["items"] if e.get("id") == item_id), None)
+
+
+def with_entry(ledger, entry):
+    items = [e for e in ledger["items"] if e.get("id") != entry["id"]]
+    items.append(entry)
+    return dict(ledger, items=items)
+
+
+def without_entry(ledger, item_id):
+    return dict(ledger, items=[e for e in ledger["items"] if e.get("id") != item_id])
+
+
+def now_iso():
+    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def ledger_change(old_ledger, new_ledger, raw):
+    if new_ledger == old_ledger or (raw is None and not new_ledger["items"]):
+        return None
+    return {"file": ledger_path(), "old": raw, "new": json.dumps(new_ledger, indent=2, ensure_ascii=False) + "\n",
+            "what": "installed.json", "internal": True}
+
+
+def restore_settings(env, entry, report):
+    """Undo a ledger entry's settings changes in the env dict (in place), listing what happened in report."""
+    for s in entry.get("settings") or []:
+        key = s.get("key", "")
+        if not key.startswith("env."):
+            report.append("%s: unknown setting, left alone" % key)
+            continue
+        name, before, after = key[4:], s.get("before"), s.get("after")
+        if name not in env:
+            report.append("%s: already gone" % key)
+        elif str(env[name]) != str(after):
+            report.append("%s: changed since install, left alone" % key)
+        elif before is None:
+            del env[name]
+            report.append("%s: deleted (was not set before)" % key)
+        elif str(before) == str(after):
+            report.append("%s: left in place (already set by you before install)" % key)
+        else:
+            env[name] = before
+            report.append("%s: restored to %s" % (key, json.dumps(before)))
+
+
+# ---------------------------------------------------------------------------------------------------------------------
 # apply / remove
 
 
@@ -117,38 +199,114 @@ def json_text(data, raw):
     return json.dumps(data, indent=indent, ensure_ascii=False).replace("\n", eol) + eol
 
 
+def apply_settings(a, env, entry, recs, report):
+    """Set one settings_env action in env, recording {key, before, after} in recs."""
+    key, value = a["key"], str(a["value"])
+    old = next((s for s in (entry or {}).get("settings") or [] if s.get("key") == "env." + key), None)
+    cur = env.get(key, MISSING)
+    if cur is not MISSING and str(cur) == value:
+        rec = old if old and str(old.get("after")) == value else {"key": "env." + key, "before": cur, "after": cur}
+    else:
+        if old and cur is not MISSING and str(cur) == str(old.get("after")):
+            before = old["before"]  # applied before with another value: keep the original prior value
+        else:
+            before = None if cur is MISSING else cur
+        env[key] = value
+        rec = {"key": "env." + key, "before": before, "after": value}
+    if rec["before"] is not None and str(rec["before"]) == str(rec["after"]):
+        report.append("env.%s: already set by you (stays on remove)" % key)
+    recs.append(rec)
+
+
+def tidy_env(settings, new_settings):
+    """Drop an env object that is empty now unless it was empty already."""
+    if new_settings.get("env") == {} and settings.get("env") != {}:
+        del new_settings["env"]
+
+
 def plan(item, remove=False):
-    """The changes an apply / remove makes: [{"file", "old", "new", "what"}] and the manual notes."""
-    changes, notes = [], []
+    """The changes an apply / remove makes: [{"file", "old", "new", "what"}], the manual notes and a report of what
+    happens to settings.json (the ledger's own change has "internal": True)."""
+    changes, notes, report = [], [], []
+    item_id = item["id"]
     claude_md, md_path = setup.read_text(setup.claude_md_path()), setup.claude_md_path()
     settings, raw, error = read_settings()
-    new_md, new_settings = claude_md, json.loads(json.dumps(settings))
+    ledger, ledger_raw = read_ledger()
+    entry = ledger_entry(ledger, item_id)
+    new_md, new_settings, new_ledger = claude_md, json.loads(json.dumps(settings)), ledger
+    recs = []
     for a in item.get("apply") or []:
         if a["kind"] == "claude_md":
             if remove:
-                new_md, _ = setup.remove_block(new_md, block_re(item["id"]))
+                new_md, found = setup.remove_block(new_md, block_re(item_id))
+                if found:
+                    report.append("CLAUDE.md: block removed")
             else:
-                new_md, _ = setup.upsert_block(new_md, block_re(item["id"]),
-                                               lambda eol, a=a: make_opt_block(item["id"], a["text"], eol))
+                new_md, _ = setup.upsert_block(new_md, block_re(item_id),
+                                               lambda eol, a=a: make_opt_block(item_id, a["text"], eol))
         elif a["kind"] == "settings_env":
             if error:
                 raise SystemExit("settings.json cannot be edited: %s" % error)
             env = new_settings.setdefault("env", {})
             if remove:
-                if str(env.get(a["key"])) == str(a["value"]):
-                    del env[a["key"]]
-                if not env:
-                    del new_settings["env"]
+                if not entry and a["key"] in env:
+                    report.append("env.%s: no install record, left alone" % a["key"])
             else:
-                env[a["key"]] = str(a["value"])
+                apply_settings(a, env, entry, recs, report)
         elif not remove:
             notes.append(a["text"])
+    if remove:
+        if entry and entry.get("settings"):
+            if error:
+                raise SystemExit("settings.json cannot be edited: %s" % error)
+            restore_settings(new_settings.setdefault("env", {}), entry, report)
+        new_ledger = without_entry(ledger, item_id)
+    elif recs:
+        new_entry = dict(entry or {}, id=item_id, settings=recs)
+        new_entry.setdefault("at", now_iso())
+        new_ledger = with_entry(ledger, new_entry)
+    tidy_env(settings, new_settings)
     if new_md != claude_md:
         changes.append({"file": md_path, "old": claude_md, "new": new_md, "what": "CLAUDE.md"})
     if new_settings != settings:
         changes.append({"file": setup.settings_path(), "old": raw, "new": json_text(new_settings, raw),
                         "what": "settings.json", "backup": raw is not None})
-    return changes, notes
+    lc = ledger_change(ledger, new_ledger, ledger_raw)
+    if lc:
+        changes.append(lc)
+    return changes, notes, report
+
+
+def plan_all():
+    """Everything devtime installed, taken out: every opt block, the setup block, every ledger settings change."""
+    claude_md, md_path = setup.read_text(setup.claude_md_path()), setup.claude_md_path()
+    settings, raw, error = read_settings()
+    ledger, ledger_raw = read_ledger()
+    changes, report = [], []
+    new_md = claude_md
+    for item_id in [m.group(1) for m in ANY_OPT_RE.finditer(claude_md or "")]:
+        new_md, _ = setup.remove_block(new_md, block_re(item_id))
+        report.append("CLAUDE.md: block %s removed" % item_id)
+    new_md, found = setup.remove_block(new_md, setup.BLOCK_RE)
+    if found:
+        report.append("CLAUDE.md: usage tracking block removed")
+    new_settings = json.loads(json.dumps(settings))
+    if any(e.get("settings") for e in ledger["items"]):
+        if error:
+            raise SystemExit("settings.json cannot be edited: %s" % error)
+        env = new_settings.setdefault("env", {})
+        for entry in ledger["items"]:
+            restore_settings(env, entry, report)
+        tidy_env(settings, new_settings)
+    if new_md != claude_md:
+        changes.append({"file": md_path, "old": claude_md, "new": new_md, "what": "CLAUDE.md"})
+    if new_settings != settings:
+        changes.append({"file": setup.settings_path(), "old": raw, "new": json_text(new_settings, raw),
+                        "what": "settings.json", "backup": raw is not None})
+    lc = ledger_change(ledger, dict(ledger, items=[]), ledger_raw)
+    if lc:
+        changes.append(lc)
+    return changes, report
 
 
 def write_changes(changes):
@@ -160,11 +318,9 @@ def write_changes(changes):
             f.write(c["new"].encode("utf-8"))
 
 
-def apply_cmd(item_id, dry_run=False, remove=False):
-    item = find_item(load_catalogue(), item_id)
-    changes, notes = plan(item, remove)
-    out = {"id": item_id, "action": "remove" if remove else "apply", "dryRun": dry_run,
-           "changed": [c["what"] for c in changes], "notes": notes}
+def finish(out, changes, dry_run, label):
+    """Print the result (and, for a dry run, the diffs); otherwise write the changes and mark them for the dashboard."""
+    out["changed"] = [c["what"] for c in changes if not c.get("internal")]
     if dry_run:
         print(json.dumps(out, separators=(",", ":")))
         for c in changes:
@@ -173,29 +329,149 @@ def apply_cmd(item_id, dry_run=False, remove=False):
             print("(no change)")
         return 0
     write_changes(changes)
-    if changes:
+    if out["changed"] and label:
         from . import overview
-        out["marker"] = overview.record_change(("Removed " if remove else "Applied ") + item["title"], None,
-                                               overview.CHANGES)
+        out["marker"] = overview.record_change(label, None, overview.CHANGES)
     else:
         out["marker"] = None
     print(json.dumps(out, separators=(",", ":")))
     return 0
 
 
+def custom_item(item_id):
+    return {"id": item_id, "title": item_id, "apply": [{"kind": "claude_md", "text": ""}]}
+
+
+def find_removable(item_id):
+    """A catalogue item, or a synthetic one for an adopted / custom block or ledger entry."""
+    items = load_catalogue()
+    if any(i["id"] == item_id for i in items):
+        return find_item(items, item_id)
+    if block_re(item_id).search(setup.read_text(setup.claude_md_path()) or "") \
+            or ledger_entry(read_ledger()[0], item_id):
+        return custom_item(item_id)
+    return find_item(items, item_id)
+
+
+def apply_cmd(item_id, dry_run=False, remove=False):
+    item = find_removable(item_id) if remove else find_item(load_catalogue(), item_id)
+    changes, notes, report = plan(item, remove)
+    out = {"id": item_id, "action": "remove" if remove else "apply", "dryRun": dry_run, "notes": notes,
+           "report": report}
+    return finish(out, changes, dry_run, ("Removed " if remove else "Applied ") + item["title"])
+
+
+def remove_all_cmd(dry_run=False):
+    changes, report = plan_all()
+    out = {"id": "all", "action": "remove", "dryRun": dry_run, "notes": [], "report": report}
+    return finish(out, changes, dry_run, "Removed all devtime optimizations")
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# adopt: make a hand-written CLAUDE.md section removable
+
+
+def heading_of(line):
+    """(level, text) of a markdown heading line, else None."""
+    m = re.match(r"^(#{1,6})[ \t]+(.*?)[ \t]*#*[ \t]*$", line.rstrip("\r\n"))
+    return (len(m.group(1)), m.group(2).strip()) if m else None
+
+
+def adopt_section(text, item_id, heading):
+    """text with the section under `heading` wrapped in the devtime:opt tags for item_id (SystemExit if it cannot)."""
+    want = heading.strip().lstrip("#").strip()
+    lines = text.splitlines(True)
+    eol = "\r\n" if "\r\n" in text else "\n"
+    heads, fence = [], False
+    for i, line in enumerate(lines):
+        if re.match(r"^\s{0,3}(```|~~~)", line):
+            fence = not fence
+        elif not fence:
+            h = heading_of(line)
+            if h:
+                heads.append((i, h[0], h[1]))
+    found = [h for h in heads if h[2] == want]
+    if not found:
+        raise SystemExit("heading %r not found in CLAUDE.md" % heading)
+    if len(found) > 1:
+        raise SystemExit("heading %r appears %d times in CLAUDE.md; cannot tell which to adopt" % (heading, len(found)))
+    first, level = found[0][0], found[0][1]
+    stop = next((h[0] for h in heads if h[0] > first and h[1] <= level), len(lines))
+    last = stop
+    while last > first + 1 and not lines[last - 1].strip():
+        last -= 1  # the blank lines before the next heading stay outside the block
+    start_pos, end_pos = sum(map(len, lines[:first])), sum(map(len, lines[:last]))
+    spans = [m.span() for m in ANY_OPT_RE.finditer(text)] + [m.span() for m in setup.BLOCK_RE.finditer(text)]
+    if any(s < end_pos and start_pos < e for s, e in spans):
+        raise SystemExit("heading %r is inside (or contains) a devtime block; nothing to adopt" % heading)
+    body = lines[first:last]
+    if not body[-1].endswith(("\n", "\r")):
+        body[-1] += eol
+    return "".join(lines[:first] + ["<!-- devtime:opt:%s -->%s" % (item_id, eol)] + body
+                   + ["<!-- devtime:opt-end:%s -->%s" % (item_id, eol)] + lines[last:])
+
+
+def adopt_cmd(item_id, heading, dry_run=False):
+    if not ID_RE.match(item_id or "") or item_id == "all":
+        raise SystemExit("id %r: use lowercase letters, digits and dashes ('all' is reserved)" % item_id)
+    md = setup.read_text(setup.claude_md_path())
+    if md is None:
+        raise SystemExit("%s does not exist" % setup.claude_md_path())
+    if block_re(item_id).search(md):
+        raise SystemExit("CLAUDE.md already has a devtime block for %s" % item_id)
+    new_md = adopt_section(md, item_id, heading)
+    ledger, ledger_raw = read_ledger()
+    entry = {"id": item_id, "at": now_iso(), "adopted": True, "heading": heading.strip()}
+    changes = [{"file": setup.claude_md_path(), "old": md, "new": new_md, "what": "CLAUDE.md"}]
+    lc = ledger_change(ledger, with_entry(ledger, entry), ledger_raw)
+    if lc:
+        changes.append(lc)
+    out = {"id": item_id, "action": "adopt", "dryRun": dry_run, "heading": heading.strip(), "notes": [], "report": []}
+    return finish(out, changes, dry_run, None)
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# list
+
+
 def list_cmd():
     claude_md = setup.read_text(setup.claude_md_path())
     settings = read_settings()[0]
-    for item in load_catalogue():
+    ledger = read_ledger()[0]
+    items = load_catalogue()
+    rows = []
+    for item in items:
         state = applied_state(item, claude_md, settings)
-        print("%-24s %-8s %s" % (item["id"], state or "-", item["title"]))
-        print("    " + item["summary"])
+        entry = ledger_entry(ledger, item["id"])
+        if state == "devtime" and entry and entry.get("adopted"):
+            state = "adopted"
+        rows.append((item, state, item["title"], item["summary"]))
+    known = {i["id"] for i in items}
+    for m in ANY_OPT_RE.finditer(claude_md or ""):
+        if m.group(1) not in known:
+            entry = ledger_entry(ledger, m.group(1)) or {}
+            rows.append((custom_item(m.group(1)), "adopted", "(custom block)",
+                         "Heading: %s" % entry["heading"] if entry.get("heading") else "Not from the catalogue."))
+    for item, state, title, summary in rows:
+        print("%-24s %-8s %s" % (item["id"], state or "-", title))
+        print("    " + summary)
+        try:
+            report = plan(item, True)[2]
+        except SystemExit:
+            report = ["settings.json cannot be read"]
+        if state == "manual":
+            report = report + ["CLAUDE.md text is yours, not devtime's: left alone (adopt makes it removable)"]
+        print("    remove: " + ("; ".join(report) if report else "nothing to do"))
     return 0
 
 
 def optimize_main(args):
     if args.opt_cmd == "list":
         return list_cmd()
+    if args.opt_cmd == "adopt":
+        return adopt_cmd(args.id, args.heading, args.dry_run)
+    if args.opt_cmd == "remove" and args.id == "all":
+        return remove_all_cmd(args.dry_run)
     return apply_cmd(args.id, getattr(args, "dry_run", False), args.opt_cmd == "remove")
 
 

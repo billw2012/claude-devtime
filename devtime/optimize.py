@@ -727,7 +727,7 @@ def analyze(days=7.0, now=None, store=None):
         state = applied_state(item, claude_md, settings)
         usd, why = est.get(item["id"], (None, ""))
         items.append({"id": item["id"], "applied": state is not None and state != "partly", "by": state,
-                      "estWeeklyUsd": usd, "why": why})
+                      "estWeeklyUsd": usd, "why": why, "guard": bool(item.get("guard"))})
     items.sort(key=lambda x: (x["estWeeklyUsd"] is None, -(x["estWeeklyUsd"] or 0)))
     m["catalogue"] = items
     return m

@@ -28,7 +28,8 @@ If the user asks what devtime installed, or to remove / undo some or all of it, 
 
 ## 2. Present
 
-A short table, one row per catalogue item: item (title), applied? (`by`: devtime / manual / no), est. $/week, why.
+A short table, one row per catalogue item: item (title), applied? (`by`: devtime / manual / no), est. $/week, why;
+mark guards "guard" (recommended regardless of the estimate).
 Applied items last or greyed out. Then up to 3 **new ideas** the metrics suggest that are not in the catalogue, each
 one line with its number, labelled "unproven" (examples: recurring failures worth a script or a CLAUDE.md note; one
 model carrying most of the cost; a role or agent type with an outsized base context). Say nothing if nothing stands out.
@@ -36,7 +37,13 @@ If the plugin's `sonnet-default-coding` is listed, call it a suggestion to A/B, 
 
 ## 3. Choose
 
-AskUserQuestion, multiSelect: the not-yet-applied catalogue items worth doing (largest estimate first, at most 4 per
+**Guards** (`guard: true`: short-lived and slim subagents, the runner for long jobs, read-only work on Haiku, at most
+2-3 agents, no poll loops, the 400k compact window) cost nothing while the pattern is absent and matter as soon as it
+appears (e.g. a project's CLAUDE.md starts asking for subagents). Recommend every not-yet-applied guard whatever its
+estimate (a $0 estimate means "not happening yet", not "not worth it"): ask them first, in their own multiSelect
+question titled as recommended for everyone, each option marked "(recommended)".
+
+Then AskUserQuestion, multiSelect: the other not-yet-applied catalogue items worth doing (largest estimate first, at most 4 per
 question; use a second question for more). The options are the items only: no "None", "Skip" or "All" option (ticking
 nothing means none; the widget's own custom answer covers anything else). Then, per chosen item, ask: apply globally now, or test it first as an A/B
 (tell the user to run `/devtime:ab <id>` afterwards for those; do not apply them here). Items whose only action is a

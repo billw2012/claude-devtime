@@ -311,7 +311,7 @@ class RealData(unittest.TestCase):
         ids = [c["id"] for c in out["catalogue"]]
         self.assertEqual(sorted(ids), sorted(i["id"] for i in optimize.load_catalogue()))
         for c in out["catalogue"]:
-            self.assertEqual(set(c), {"id", "applied", "by", "estWeeklyUsd", "why"})
+            self.assertEqual(set(c), {"id", "applied", "by", "estWeeklyUsd", "why", "guard"})
             self.assertIsInstance(c["applied"], bool)
         ests = [c["estWeeklyUsd"] for c in out["catalogue"]]
         known = [e for e in ests if e is not None]

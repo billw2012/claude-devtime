@@ -10,6 +10,7 @@
 
 [[opt]]
 id = "slim-agents"
+guard = true
 title = "Slim agent types instead of general-purpose"
 summary = "A general-purpose agent re-reads ~50k tokens of tool definitions on every request; coder / reader carry 10-20k."
 signal = "general-purpose requests x (base context - 15k) x cache-read price"
@@ -24,6 +25,7 @@ text = """## Agent types
 
 [[opt]]
 id = "runner-for-long-jobs"
+guard = true
 title = "Long jobs on a Haiku runner"
 summary = "Builds, test suites and editor runs go to the runner agent (Haiku); a coding agent that waits re-writes its whole cache."
 signal = "cache re-writes of subagents after idle gaps over 5 min"
@@ -38,6 +40,7 @@ text = """## Long jobs
 
 [[opt]]
 id = "readonly-on-haiku"
+guard = true
 title = "Searches, reads and progress checks on Haiku"
 summary = "Read-only subagents (no edits) on Opus or Sonnet cost several times what the same reading costs on Haiku."
 signal = "cost of read-only subagents on non-Haiku models, re-priced at Haiku rates"
@@ -51,7 +54,8 @@ text = """## Read-only work
 
 [[opt]]
 id = "handoff-250k"
-title = "Subagents hand off past ~250k context"
+guard = true
+title = "Short-lived subagents: one stage each, hand off past ~250k context"
 summary = "A long-lived agent re-reads its whole context on every call; a fresh agent from a short handoff is cheaper."
 signal = "cost of subagent requests above 250k context, beyond the first 250k"
 evidence = "Subagent contexts reached 500-900k tokens on 1M-context models; each call re-read all of it. One week: 130 subagents went past 250k, 74% of cost was requests above 250k context."
@@ -60,10 +64,12 @@ detect = '(?i)hand ?off.{0,80}250k|250k.{0,80}hand ?off'
 [[opt.apply]]
 kind = "claude_md"
 text = """## Subagent hand-off
+- One stage per subagent: it ends when its stage is done, and the next stage gets a fresh agent (no long chains of follow-up tasks or resumes into a big context).
 - A subagent whose context passes ~250k tokens finishes its current step, commits, and ends with a short handoff (done / next / key paths and commands). The caller continues with a fresh agent. Compaction loses detail, so hand off before it comes to that."""
 
 [[opt]]
 id = "autocompact-400k"
+guard = true
 title = "Cap the auto-compact window at 400k"
 summary = "Compacts earlier on 1M-context models so a session does not carry (and re-read) 500k+ tokens on every call."
 signal = "cost of requests above 400k context, beyond the first 400k"
@@ -91,6 +97,7 @@ text = """## Scripts first
 
 [[opt]]
 id = "parallelism"
+guard = true
 title = "At most 2-3 agents at once"
 summary = "Many agents in parallel burn the plan's limits faster and pile up cache re-writes, with little extra throughput."
 signal = "peak and typical number of agents active in the same 5 minutes"
@@ -129,6 +136,7 @@ text = "Run /devtime:start: it asks for the cap and writes the 'Usage tracking (
 
 [[opt]]
 id = "background-not-polling"
+guard = true
 title = "Wait via background jobs and notifications, not poll loops"
 summary = "A sleep / poll loop wakes the agent again and again; after 5 minutes of idle each wake re-writes its cache."
 signal = "cache re-writes after gaps that were spent in sleep / poll / wait calls"

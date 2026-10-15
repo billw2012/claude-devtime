@@ -411,9 +411,41 @@ def adopt_section(text, item_id, heading):
                    + ["<!-- devtime:opt-end:%s -->%s" % (item_id, eol)] + lines[last:])
 
 
-def adopt_cmd(item_id, heading, dry_run=False):
+def adopt_setting_cmd(item_id, keys, dry_run=False):
+    """Records settings the user set by hand (env.KEY) as installed under item_id, as if they were absent before, so
+    removing item_id deletes them (unless changed since)."""
+    settings, _, error = read_settings()
+    if error:
+        raise SystemExit("settings.json cannot be read: %s" % error)
+    env = settings.get("env") or {}
+    recs = []
+    for key in keys:
+        name = key[4:] if key.startswith("env.") else key
+        if name not in env:
+            raise SystemExit("env.%s is not set in settings.json; nothing to adopt" % name)
+        recs.append({"key": "env." + name, "before": None, "after": str(env[name])})
+    ledger, ledger_raw = read_ledger()
+    old = ledger_entry(ledger, item_id) or {}
+    have = {r["key"] for r in recs}
+    recs = [r for r in old.get("settings") or [] if r.get("key") not in have] + recs
+    entry = dict(old, id=item_id, adopted=True, settings=recs)
+    entry.setdefault("at", now_iso())
+    changes = []
+    lc = ledger_change(ledger, with_entry(ledger, entry), ledger_raw)
+    if lc:
+        changes.append(lc)
+    out = {"id": item_id, "action": "adopt", "dryRun": dry_run, "settings": sorted(have), "notes": [],
+           "report": ["%s: recorded; remove deletes it" % k for k in sorted(have)]}
+    return finish(out, changes, dry_run, None)
+
+
+def adopt_cmd(item_id, heading=None, dry_run=False, settings=None):
     if not ID_RE.match(item_id or "") or item_id == "all":
         raise SystemExit("id %r: use lowercase letters, digits and dashes ('all' is reserved)" % item_id)
+    if settings:
+        return adopt_setting_cmd(item_id, settings, dry_run)
+    if not heading:
+        raise SystemExit("adopt needs --heading or --setting")
     md = setup.read_text(setup.claude_md_path())
     if md is None:
         raise SystemExit("%s does not exist" % setup.claude_md_path())
@@ -469,7 +501,7 @@ def optimize_main(args):
     if args.opt_cmd == "list":
         return list_cmd()
     if args.opt_cmd == "adopt":
-        return adopt_cmd(args.id, args.heading, args.dry_run)
+        return adopt_cmd(args.id, args.heading, args.dry_run, getattr(args, "setting", None))
     if args.opt_cmd == "remove" and args.id == "all":
         return remove_all_cmd(args.dry_run)
     return apply_cmd(args.id, getattr(args, "dry_run", False), args.opt_cmd == "remove")

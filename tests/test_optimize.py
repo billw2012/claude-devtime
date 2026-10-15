@@ -172,6 +172,16 @@ class Ledger(Base):
         self.assertEqual(self.read(self.settings), original)
         self.assertEqual(self.ledger()["items"], [])
 
+    def test_adopt_setting_makes_hand_set_value_removable(self):
+        self.write(self.settings, json.dumps({"env": {self.KEY: "400000", "FOO": "1"}}) + "\n")
+        self.run_cli("optimize", "adopt", "autocompact-400k", "--setting", "env." + self.KEY)
+        self.assertEqual(self.env(), {self.KEY: "400000", "FOO": "1"})  # settings.json untouched
+        self.assertIsNone(self.ledger()["items"][0]["settings"][0]["before"])
+        self.assertIn("deleted", self.run_cli("optimize", "remove", "autocompact-400k"))
+        self.assertEqual(self.env(), {"FOO": "1"})
+        with self.assertRaises(SystemExit):
+            self.run_cli("optimize", "adopt", "x", "--setting", "env.NOT_SET")
+
     def test_absent_key_is_deleted_and_env_dropped(self):
         self.write(self.settings, "{}\n")
         self.run_cli("optimize", "apply", "autocompact-400k")

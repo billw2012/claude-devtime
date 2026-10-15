@@ -20,7 +20,7 @@
     python -m devtime setup check | claude-md --cap N [--dry-run] | open
                                                          what /devtime:start does mechanically (devtime/setup.py)
     python -m devtime analyze [--days 7]                compact JSON of usage metrics and the ranked optimization catalogue
-    python -m devtime optimize list | apply ID [--dry-run] | remove ID|all [--dry-run] | adopt ID --heading H [--dry-run]
+    python -m devtime optimize list | apply ID [--dry-run] | remove ID|all [--dry-run] | adopt ID --heading H | --setting env.KEY [--dry-run]
                                                          what /devtime:optimize does (devtime/optimize.py); remove
                                                          restores prior settings.json values from the install ledger
     python -m devtime ab new ID --title T --arm name[:model[:agent_type]] ... | arm ID STAGE | report ID | stop ID | list
@@ -106,7 +106,8 @@ def main(argv=None):
     q.add_argument("--dry-run", action="store_true")
     q = osub.add_parser("adopt")
     q.add_argument("id", help="catalogue id or a custom id (lowercase letters, digits, dashes)")
-    q.add_argument("--heading", required=True, help="text of the markdown heading of the CLAUDE.md section")
+    q.add_argument("--heading", help="text of the markdown heading of the CLAUDE.md section")
+    q.add_argument("--setting", action="append", help="env.KEY in settings.json set by hand (repeatable): removing ID deletes it")
     q.add_argument("--dry-run", action="store_true")
     p = sub.add_parser("ab")
     asub = p.add_subparsers(dest="ab_cmd", required=True)

@@ -36,9 +36,12 @@ If the args are exactly `tick`, do only the **pass** below (no setup, no browser
 
 ## The pass
 
-1. If the tool `mcp__ccd_session_mgmt__get_usage` exists, call it (load it with ToolSearch query
+1. Plan readings normally arrive by themselves: the plugin's `session.measure` hook posts every session's 5-hour and
+   weekly usage to the dashboard (`/api/reading`). Calling `get_usage` is only a fallback for when that hook is
+   unavailable (an older Claude Code build, or no readings in the last hour in the previous pass's `reading`): then,
+   if the tool `mcp__ccd_session_mgmt__get_usage` exists, call it (load it with ToolSearch query
    `select:mcp__ccd_session_mgmt__get_usage` if it is deferred; skip silently if unavailable). The dashboard picks the
-   reading up from the transcript; ignore its output.
+   reading up from the transcript; ignore its output. Otherwise skip this step.
 2. Run `python -m devtime tick --session ${CLAUDE_SESSION_ID}` (JSON: url, org, reading, labels, review, alerts, cap,
    setup). One account can be signed into several organisations that share `~/.claude`; the pass is scoped to the
    organisation of THIS session (`org`), so nothing of another organisation is read, labelled or reviewed. If the

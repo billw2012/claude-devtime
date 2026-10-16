@@ -7,7 +7,7 @@ const el = (tag, attrs = {}, ...kids) => {
   for (const [k, v] of Object.entries(attrs)) {
     if (k === "class") n.className = v;
     else if (k.startsWith("on")) n.addEventListener(k.slice(2), v);
-    else n.setAttribute(k, v);
+    else if (v != null) n.setAttribute(k, v);
   }
   for (const kid of kids) if (kid != null) n.append(kid instanceof Node ? kid : document.createTextNode(String(kid)));
   return n;
@@ -19,6 +19,14 @@ const svg = (tag, attrs = {}) => {
 };
 const pad2 = (n) => String(n).padStart(2, "0");
 const money = (x) => (x == null ? "–" : x >= 1000 ? `$${(x / 1000).toFixed(x >= 10000 ? 0 : 1)}k` : x >= 100 ? `$${Math.round(x)}` : `$${x.toFixed(x >= 10 ? 1 : 2)}`);
+// Costs are shown as a share of the weekly limit ("% of week") once the plan's readings give an allowance (API-equivalent
+// dollars per 100 % of the week); the dollar amount stays in the tooltip. Without an allowance: dollars.
+const hasAllowance = () => S.allowance > 0;
+const weekPct = (x) => { const v = 100 * x / S.allowance; return `${v >= 10 ? v.toFixed(0) : v >= 1 ? v.toFixed(1) : v.toFixed(2)} %`; };
+const cost = (x) => (x == null ? "–" : hasAllowance() ? weekPct(x) : money(x));
+const costTip = (x) => (x != null && hasAllowance() ? `${money(x)} API-equivalent` : undefined);
+const costBoth = (x) => (hasAllowance() ? `${weekPct(x)} (${money(x)})` : money(x));
+const costCell = (x, cls) => el("td", { class: cls, title: costTip(x) }, cost(x));
 const pct = (x) => (x == null ? "–" : `${(100 * x).toFixed(x >= 0.1 || x === 0 ? 0 : 1)} %`);
 const dur = (s) => {
   s = Math.max(0, Math.round(s));
@@ -32,7 +40,7 @@ const DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const when = (t) => { const d = new Date(t * 1000); return `${DOW[d.getDay()]} ${clock(t)}`; };
 const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
 
-const S = { project: "*", range: "24h", data: null, alerts: [] };
+const S = { project: "*", range: "24h", data: null, alerts: [], allowance: null };
 
 // ------------------------------------------------------------------------------------------------------------ tiles
 // delta: change against the previous period of the same length; better: "down" or "up" is the good direction.
@@ -52,6 +60,12 @@ function tile(label, value, detail, help, cur, prev, better, extra) {
   return t;
 }
 
+// "$2,600 ± 200": the fitted allowance and its uncertainty (one standard error), when the fit has one.
+function allowanceText(L, fallback) {
+  const a = L && L.allowance > 0 ? L.allowance : fallback;
+  return L && L.allowanceError > 0 && L.allowance > 0 ? `${money(a)} ± ${money(L.allowanceError)}` : money(a);
+}
+
 // A reading of the plan's usage from the app in the last hour: the weekly numbers are then the app's own.
 const fresh = (L) => L && L.reading && L.reading.exact && L.now - L.reading.t < 3600;
 
@@ -63,23 +77,23 @@ function renderTiles(o) {
     el("i", { style: `width:${Math.min(100, 100 * wk.share).toFixed(1)}%` })) : null;
   if (gauge) gauge.firstChild.style.width = `${Math.min(100, 100 * wk.share).toFixed(1)}%`;
   $("#eff").replaceChildren(
-    tile("Cost", money(c.cost), `${money(c.costPerHour)}/h · subagents ${pct(share(c.subCost, c.cost))} · Opus ${pct(share(c.opusCost, c.cost))}`,
-      "Estimated API-equivalent cost of every request in the range (token counts × config pricing).",
+    tile(hasAllowance() ? "Cost (% of week)" : "Cost", cost(c.cost), `${cost(c.costPerHour)}/h · subagents ${pct(share(c.subCost, c.cost))} · Opus ${pct(share(c.opusCost, c.cost))}`,
+      `Estimated API-equivalent cost of every request in the range (token counts × config pricing)${hasAllowance() ? `: ${money(c.cost)}, ${money(c.costPerHour)}/h. Shown as a share of the weekly limit (allowance ~${money(S.allowance)}).` : "."}`,
       c.costPerHour, p.costPerHour, "down"),
-    tile("Cost per commit", money(c.costPerCommit), `${c.commits} commits (from git calls, approx.)`,
-      "Cost divided by the commits agents made in the range: a rough cost of one unit of finished work.",
+    tile(hasAllowance() ? "Per commit (% of week)" : "Cost per commit", cost(c.costPerCommit), `${c.commits} commits (from git calls, approx.)`,
+      `Cost divided by the commits agents made in the range: a rough cost of one unit of finished work${hasAllowance() && c.costPerCommit != null ? ` (${money(c.costPerCommit)})` : ""}.`,
       c.costPerCommit, p.costPerCommit, "down"),
-    tile("Avoidable: cache churn", money(c.churn), `${pct(share(c.churn, c.cost))} of cost · subagents re-writing their cache after waits`,
+    tile("Avoidable: cache churn", cost(c.churn), `${pct(share(c.churn, c.cost))} of cost · subagents re-writing their cache after waits`,
       "Requests in which a subagent re-wrote its whole prompt cache after waiting over 5 minutes (its cache lives 5 minutes). Long jobs belong to the main session.",
       share(c.churn, c.cost), share(p.churn, p.cost), "down"),
-    tile("Big-context share", pct(share(c.big, c.cost)), `${money(c.big)} in requests over 300k tokens of context`,
+    tile("Big-context share", pct(share(c.big, c.cost)), `${cost(c.big)} in requests over 300k tokens of context`,
       "Share of cost in requests carrying over 300k tokens of context; every call re-reads all of it. Hand off to a fresh agent earlier.",
       share(c.big, c.cost), share(p.big, p.cost), "down"),
     tile("Cache hit", pct(c.cacheHit), `${c.requests.toLocaleString()} requests`,
       "Share of input tokens read from the prompt cache (cheap) rather than written or sent fresh.",
       c.cacheHit, p.cacheHit, "up"),
     tile(o.limits ? (fresh(o.limits) ? "Weekly limit used" : "Weekly limit used (est.)") : "7-day usage (est.)", wk.share != null ? pct(wk.share) : money(wk.cost),
-      wk.budget ? `${money(wk.cost)} of ~${money(wk.budget)}${o.limits ? ` · resets ${when(o.limits.end)}` : " weekly allowance"}, all projects` : "set weekly_budget_usd in config",
+      wk.budget ? `${money(wk.cost)} of ~${allowanceText(o.limits, wk.budget)}${o.limits ? ` · resets ${when(o.limits.end)}` : " weekly allowance"}, all projects` : "set weekly_budget_usd in config",
       o.limits ? "Estimated cost since the plan's last weekly reset (weekly_reset in config/devtime.toml) against weekly_budget_usd, calibrated from the usage % the plan reported."
         : "Last 7 days' estimated cost against weekly_budget_usd (config/devtime.toml). Set weekly_reset to follow the plan's own week.",
       null, null, null, gauge),
@@ -120,7 +134,7 @@ function renderLive(o) {
   $("#live-sub").textContent = rows.length ? `${mains} session${mains === 1 ? "" : "s"} · ${subs} subagent${subs === 1 ? "" : "s"} · active in the last 10 min` : "";
   if (!rows.length) { $("#live-list").replaceChildren(el("div", { class: "sub" }, "Nothing running.")); return; }
   const now = o.now;
-  const head = el("tr", {}, ...["", "Model", "Doing now", "Context", "Last 30 min", "Total"].map((h, i) => el("th", { class: i >= 3 ? "num" : "" }, h)));
+  const head = el("tr", {}, ...["", "Model", "Doing now", "Context", hasAllowance() ? "Last 30 min (% of week)" : "Last 30 min", hasAllowance() ? "Total (% of week)" : "Total"].map((h, i) => el("th", { class: i >= 3 ? "num" : "" }, h)));
   const body = rows.map((r) => {
     const main = r.role === "main";
     const doing = r.now ? `${r.now.kind}${r.now.label ? ` · ${r.now.label}` : ""}` : "";
@@ -133,8 +147,8 @@ function renderLive(o) {
       el("td", { class: `label doing ${r.now && r.now.running ? "running" : ""}`, title: doing },
         !doing ? "" : r.now.running ? `${doing}${forS > 60 ? ` (for ${dur(forS)})` : ""}` : `last: ${doing}, ${dur(now - r.end)} ago`),
       el("td", { class: "num" }, r.context ? tok(r.context) : ""),
-      el("td", { class: "num" }, money(r.burn30)),
-      el("td", { class: "num" }, money(r.cost)));
+      costCell(r.burn30, "num"),
+      costCell(r.cost, "num"));
   });
   $("#live-list").replaceChildren(el("table", { class: "live-table" }, el("thead", {}, head), el("tbody", {}, ...body)));
 }
@@ -162,19 +176,20 @@ function renderTrend(o) {
   const t = o.trend, n = t.main.length;
   const host = $("#trend");
   const W = Math.max(300, host.clientWidth || 500), H = 200, m = { l: 44, r: 6, t: 8, b: 24 };
-  const series = [["main sessions", t.main.map((v) => v), css("--s1")],
-    ["subagents", t.sub.map((v, i) => Math.max(0, v - t.churn[i])), css("--s3")],
-    ["avoidable (cache churn)", t.churn, css("--critical")]];
-  const tot = t.main.map((v, i) => v + t.sub[i]);
-  const maxV = Math.max(1, ...tot);
-  const stepV = [1, 2, 5, 10, 20, 25, 50, 100, 200, 250, 500, 1000].find((s) => s * 4 >= maxV) || 1000;
+  const u = hasAllowance() ? 100 / S.allowance : 1;  // chart units: % of the week, else dollars
+  const series = [["main sessions", t.main.map((v) => v * u), css("--s1")],
+    ["subagents", t.sub.map((v, i) => Math.max(0, v - t.churn[i]) * u), css("--s3")],
+    ["avoidable (cache churn)", t.churn.map((v) => v * u), css("--critical")]];
+  const tot = t.main.map((v, i) => (v + t.sub[i]) * u);
+  const maxV = Math.max(hasAllowance() ? 0.1 : 1, ...tot);
+  const stepV = (hasAllowance() ? [0.1, 0.2, 0.5, 1, 2, 5, 10, 20, 25, 50, 100] : [1, 2, 5, 10, 20, 25, 50, 100, 200, 250, 500, 1000]).find((s) => s * 4 >= maxV) || 1000;
   const yMax = stepV * 4;
   const root = svg("svg", { width: W, height: H, viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": "Cost per bucket" });
   const g = svg("g", { class: "axis" });
   for (let i = 0; i <= 4; i++) {
     const y = m.t + (H - m.t - m.b) * (1 - i / 4);
     g.append(svg("line", { x1: m.l, x2: W - m.r, y1: y, y2: y }));
-    const tx = svg("text", { x: m.l - 6, y: y + 4, "text-anchor": "end" }); tx.textContent = `$${stepV * i}`; g.append(tx);
+    const tx = svg("text", { x: m.l - 6, y: y + 4, "text-anchor": "end" }); tx.textContent = hasAllowance() ? `${+(stepV * i).toFixed(2)}%` : `$${stepV * i}`; g.append(tx);
   }
   root.append(g);
   const bw = (W - m.l - m.r) / n, barW = Math.max(1, Math.min(22, bw - 2));
@@ -190,7 +205,7 @@ function renderTrend(o) {
     }
     const k = t.start + i * t.step;
     const hit = svg("rect", { x: m.l + i * bw, y: m.t, width: bw, height: H - m.t - m.b, fill: "transparent" });
-    const tipText = `${when(k)}–${clock(k + t.step)}: ${money(tot[i])} (main ${money(t.main[i])}, subagents ${money(t.sub[i])}, avoidable ${money(t.churn[i])})`;
+    const tipText = `${when(k)}–${clock(k + t.step)}: ${costBoth(t.main[i] + t.sub[i])} (main ${costBoth(t.main[i])}, subagents ${costBoth(t.sub[i])}, avoidable ${costBoth(t.churn[i])})`;
     hit.append(svg("title", {})); hit.firstChild.textContent = tipText;
     root.append(hit);
     if (i % every === 0) {
@@ -201,7 +216,7 @@ function renderTrend(o) {
     }
   }
   host.replaceChildren(root);
-  $("#trend-sub").textContent = `per ${t.step >= 86400 ? "day" : t.step >= 3600 ? "hour" : `${t.step / 60} min`}`;
+  $("#trend-sub").textContent = `per ${t.step >= 86400 ? "day" : t.step >= 3600 ? "hour" : `${t.step / 60} min`}${hasAllowance() ? " · % of the weekly limit" : ""}`;
   $("#trend-legend").replaceChildren(...series.map(([name, , color]) => el("span", {}, el("i", { style: `background:${color}` }), name)));
   for (const i of $("#trend-legend").querySelectorAll("i")) i.style.background = series.find((s) => s[0] === i.parentNode.textContent)[2];
 }
@@ -259,7 +274,7 @@ function renderLimit(o) {
     root.append(tx);
   }
   const lim = svg("line", { x1: m.l, x2: W - m.r, y1: Y(1), y2: Y(1), stroke: css("--critical"), "stroke-width": 1.5 });
-  lim.append(svg("title", {})); lim.firstChild.textContent = `weekly limit (~${money(L.budget)} API-equivalent)`; root.append(lim);
+  lim.append(svg("title", {})); lim.firstChild.textContent = `weekly limit (~${allowanceText(L, L.budget)} API-equivalent)`; root.append(lim);
   const lt = svg("text", { x: m.l + 4, y: Y(1) - 4, fill: css("--critical"), "font-size": 11 }); lt.textContent = "weekly limit"; root.append(lt);
   const pts = L.used.map((v, i) => [X(Math.min(L.start + (i + 1) * L.step, L.now)), Y(v)]);
   pts.unshift([X(L.start), Y(0)]);
@@ -288,7 +303,7 @@ function renderLimit(o) {
     const tx = svg("text", { x: w.x0 + 4, y: y + 8.5, "font-size": 10, fill: css("--text-primary") });
     tx.textContent = w.name; g3.append(tx);
     g3.append(svg("title", {}));
-    g3.lastChild.textContent = `${w.name}: ${money(w.cost)} (${pct(w.share)} of the week), ${w.ongoing ? "running since before this week" : `from ${when(w.from)}`} to ${when(w.to)}${w.agents ? `, ${w.agents} agents` : ""}`;
+    g3.lastChild.textContent = `${w.name}: ${pct(w.share)} of the week (${money(w.cost)}), ${w.ongoing ? "running since before this week" : `from ${when(w.from)}`} to ${when(w.to)}${w.agents ? `, ${w.agents} agents` : ""}`;
     root.append(g3);
   }
   let lastX = -99, row = 0;
@@ -309,15 +324,22 @@ function renderLimit(o) {
   const s = L.session;
   const R = L.reading;
   const read = R ? `${pct(R.share)} at ${clock(R.t)} (app${R.exact ? "" : " history"})` + (L.now - R.t > 600 ? ` · ~${pct(L.share)} now` : "") : `~${pct(L.share)} (est.)`;
-  $("#limit-sub").textContent = `${read} · resets ${L.resetGuessed ? "≈ " : ""}${when(L.end)}` + (s.start ? ` · 5-hour window ${R && R.exact && L.now - R.t < 3600 ? `${pct(R.five)} used, ` : ""}ends ${clock(s.end)}` : "");
+  $("#limit-sub").textContent = `${L.allowance > 0 ? `allowance ~${allowanceText(L)} · ` : ""}${read} · resets ${L.resetGuessed ? "≈ " : ""}${when(L.end)}` + (s.start ? ` · 5-hour window ${R && R.exact && L.now - R.t < 3600 ? `${pct(R.five)} used, ` : ""}ends ${clock(s.end)}` : "");
   const fate = (p) => (p.limitAt ? `limit hit ${when(p.limitAt)}` : `${pct(p.atReset)} at reset`);
-  const items = [[R ? "used" : "used (est.)", cUsed, L.fit ? `fitted to ${L.fit.samples} app samples: allowance ~${money(L.fit.allowance)} API-equivalent` : `weekly_budget_usd ${money(L.budget)}`],
+  const items = [[R ? "used" : "used (est.)", cUsed, L.fit ? `fitted to ${L.fit.samples} app samples: allowance ~${allowanceText(L)} API-equivalent${L.fit.sigma != null ? `; readings scatter ±${(100 * L.fit.sigma).toFixed(1)} points around the fit` : ""}${familyText(L.fit)}` : `weekly_budget_usd ${money(L.budget)}`],
     ...L.pace.map((p, i) => [`pace ${p.label}: ${fate(p)}`, cPace[i], `from ${when(p.from)}`]),
     ["5-hour session windows", cUsed, ""]];
   $("#limit-legend").replaceChildren(...items.map(([name, color, title], i) => {
     const sw = el("i", {}); sw.style.background = color; if (i === items.length - 1) sw.style.opacity = 0.3;
     return el("span", title ? { title } : {}, sw, name);
   }));
+}
+
+// What each model family seems to weigh against the plan (reported by the fit when the data separates them).
+function familyText(fit) {
+  const f = fit && fit.byFamily;
+  if (!f) return "";
+  return "; per model: " + Object.entries(f).map(([k, v]) => `${k} ~${money(v.allowance)} ± ${money(v.error)} (${pct(v.share)} of cost)`).join(", ");
 }
 
 // ------------------------------------------------------------------------------------------------------- throughput
@@ -365,12 +387,12 @@ function renderThroughput(o) {
 function renderSpenders(o) {
   const rows = o.spenders;
   if (!rows.length) { $("#spenders").replaceChildren(el("div", { class: "sub" }, "No requests in this range.")); return; }
-  const head = el("tr", {}, ...["Who", "Model", "Cost", "Avoidable", "Context (median)", "Requests"].map((h, i) => el("th", { class: i >= 2 ? "num" : "" }, h)));
+  const head = el("tr", {}, ...["Who", "Model", hasAllowance() ? "Cost (% of week)" : "Cost", "Avoidable", "Context (median)", "Requests"].map((h, i) => el("th", { class: i >= 2 ? "num" : "" }, h)));
   const body = rows.map((r) => el("tr", {},
     el("td", { class: "label", title: r.session ? `subagent of ${r.session}` : "main session" }, r.role === "main" ? `${r.name} (session)` : r.name),
     el("td", {}, r.model),
-    el("td", { class: "num" }, money(r.cost)),
-    el("td", { class: "num" }, r.churn ? money(r.churn) : ""),
+    costCell(r.cost, "num"),
+    r.churn ? costCell(r.churn, "num") : el("td", { class: "num" }),
     el("td", { class: "num" }, tok(r.context)),
     el("td", { class: "num" }, r.requests.toLocaleString())));
   $("#spenders").replaceChildren(el("table", {}, el("thead", {}, head), el("tbody", {}, ...body)));
@@ -380,9 +402,9 @@ function renderSpenders(o) {
 function renderMonitoring(o) {
   const m = o.monitoring || { total: { wakes: 0, requests: 0, cost: 0 }, byTag: [], bySession: [] };
   const t = m.total;
-  $("#mon-sub").textContent = t.requests ? `${t.wakes.toLocaleString()} wakes · ${money(t.cost)}${t.share != null ? ` · ${pct(t.share)} of cost in this range` : ""}` : "";
-  const cols = [["Wakes", (r) => r.wakes.toLocaleString(), 1], ["Avg cost / wake", (r) => r.avgPerWake == null ? "" : money(r.avgPerWake), 1],
-    ["Cost", (r) => money(r.cost), 1], ["Input", (r) => tok(r.in), 1], ["Cache read", (r) => tok(r.cacheRead), 1],
+  $("#mon-sub").textContent = t.requests ? `${t.wakes.toLocaleString()} wakes · ${cost(t.cost)}${t.share != null ? ` · ${pct(t.share)} of cost in this range` : ""}` : "";
+  const cols = [["Wakes", (r) => r.wakes.toLocaleString(), 1], ["Avg cost / wake", (r) => r.avgPerWake == null ? "" : cost(r.avgPerWake), 1],
+    ["Cost", (r) => cost(r.cost), 1], ["Input", (r) => tok(r.in), 1], ["Cache read", (r) => tok(r.cacheRead), 1],
     ["Cache write", (r) => tok(r.cacheWrite), 1], ["Output", (r) => tok(r.out), 1]];
   smallTable($("#mon-tags"), "By monitor", [["Monitor", (r) => r.tag || "all"], ...cols],
     m.byTag.length > 1 ? [...m.byTag, Object.assign({ tag: "total" }, t)] : m.byTag, "No Monitor wakes in this range.");
@@ -403,17 +425,17 @@ function renderExperiments(o) {
   $("#exp-sub").textContent = `last ${x.days} days, all of this project's sessions`;
   const named = x.ab.some((r) => r.experiment);
   smallTable($("#exp-ab"), "Implementation: Opus vs Sonnet vs Opus plan → Sonnet", [
-    ...(named ? [["Experiment", (r) => r.experiment || "legacy"]] : []), ["Arm", (r) => r.model], ["Stages", (r) => r.stages, 1], ["Cost / stage (median)", (r) => money(r.medianCost), 1],
+    ...(named ? [["Experiment", (r) => r.experiment || "legacy"]] : []), ["Arm", (r) => r.model], ["Stages", (r) => r.stages, 1], ["Cost / stage (median)", (r) => cost(r.medianCost), 1],
     ["Time / stage", (r) => dur(r.medianMinutes * 60), 1], ["Needed fix-ups", (r) => pct(r.rework), 1],
-    ["Agents / stage", (r) => r.agentsPerStage.toFixed(1), 1], ["Cost / commit", (r) => money(r.costPerCommit), 1],
+    ["Agents / stage", (r) => r.agentsPerStage.toFixed(1), 1], ["Cost / commit", (r) => cost(r.costPerCommit), 1],
   ], x.ab, "No AB-tagged stages yet.");
   smallTable($("#exp-runner"), "Runner: Haiku vs Sonnet", [
-    ["Model", (r) => r.model], ["Jobs", (r) => r.runs, 1], ["Cost / job (median)", (r) => money(r.medianCost), 1],
+    ["Model", (r) => r.model], ["Jobs", (r) => r.runs, 1], ["Cost / job (median)", (r) => cost(r.medianCost), 1],
     ["Time / job", (r) => dur(r.medianMinutes * 60), 1], ["Context", (r) => tok(r.medianContext), 1],
   ], x.runner, "No runner jobs yet.");
   smallTable($("#exp-types"), "Fixed context by agent type (last 7 days)", [
     ["Agent type", (r) => r.type], ["Agents", (r) => r.agents, 1], ["Fixed context", (r) => tok(r.baseContext), 1],
-    ["Requests", (r) => r.requests.toLocaleString(), 1], ["Cost / agent (median)", (r) => money(r.medianCost), 1],
+    ["Requests", (r) => r.requests.toLocaleString(), 1], ["Cost / agent (median)", (r) => cost(r.medianCost), 1],
   ], x.types || [], "No subagents in the last 7 days.");
 }
 
@@ -435,6 +457,7 @@ async function refresh() {
       getJSON("/api/alerts").catch(() => ({ alerts: [] })),
     ]);
     S.data = o;
+    S.allowance = o.limits && o.limits.allowance > 0 ? o.limits.allowance : null;
     S.alerts = (a.alerts || []).filter((x) => S.project === "*" || !x.project || x.project === S.project);
     renderTiles(o); renderLive(o); renderAlerts(); renderTrend(o); renderLimit(o); renderThroughput(o); renderSpenders(o); renderMonitoring(o); renderExperiments(o);
     $("#live").textContent = `updated ${clock(o.now)}`;

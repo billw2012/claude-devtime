@@ -8,6 +8,9 @@ helps you cut usage.
   writes to `~/.claude/projects/`.
 - **Weekly-limit chart**: your plan's usage against the weekly limit, with exact readings harvested from the
   `get_usage` calls your sessions make, and projections to the next reset.
+- **Readings from every session**: a hooks module reports each session's 5-hour and weekly usage to the dashboard
+  (no `get_usage` call needed), and costs are shown as a share of the weekly limit ("% of week") once the allowance is
+  fitted, with its uncertainty; dollars stay in the tooltips. (Needs a Claude Code build with function hooks.)
 - **Usage alerts**: subagents that cost too much, re-write their prompt cache after long waits, run with huge
   contexts, or burn money fast. Alerts reach the dashboard and the session concerned.
 - **Slim agent types**: `coder`, `reader` and `runner` agents with a small fixed context, plus hooks that stop subagents

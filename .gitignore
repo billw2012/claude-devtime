@@ -6,3 +6,4 @@ out/
 *.bak
 .venv/
 .DS_Store
+.claude-plugin/types/

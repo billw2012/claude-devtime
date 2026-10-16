@@ -163,6 +163,22 @@ the same from the Unreal logs alone (0.4 s), and `/api/findings` serves it.
 The plugin registers `ensure_server.py` (SessionStart) and `agent_budget.py` (below) through `hooks/run.sh`, which
 finds `python3` / `python`.
 
+- `hooks/register.tsx` is a hooks module (`"modules"` in `hooks/hooks.json`, beside the command hooks; needs a Claude
+  Code build with function hooks, older builds ignore it). `session.measure` runs in **every** session (CLI and desktop),
+  observes only and draws nothing: when the session's `rateLimits` hold `five_hour` and/or `seven_day` it POSTs
+  `{session, at, fiveHour, fiveHourReset, weekly, weeklyReset}` (percent used, ISO reset times; the session id is
+  `$.session.id()`) to `http://127.0.0.1:<port>/api/reading`, silently, failures ignored. The port is read from
+  `<data dir>/cache/port.txt` (data dir = `DEVTIME_HOME`, else `~/.claude/devtime`), else 8765. The same module draws the
+  one-line band above the prompt and the `devtime` pane (`/devtime-panel`), only in the session that ran
+  `/devtime:start`: pace, rate, cost per commit, waste, live burners, alerts, polled every minute. Costs there are shares of
+  the week once an allowance is known. Tests: `claude plugin test .` (`hooks/panel.test.ts`; the engine CLI, not the old `claude`).
+- `POST /api/reading` (`devtime/readings.py`): accepts only loopback peers with a loopback `Host` and
+  `Content-Type: application/json`. It resolves the session's org (scanned transcripts, the desktop index, else the
+  transcript file's own `credential_org` tag; a session not found yet is queued and recorded when it is known, or under
+  `unknown` after 15 min) and appends a sample to `cache/plan_samples.jsonl` in the format `plan-sample` writes, with the
+  org and exact reset times. A reading identical to the org's last one is not stored again, and a stale one (the same weekly
+  window with a lower share, or an earlier window: an idle session repeating an old figure) is dropped. Answers
+  `{"result": "recorded"|"duplicate"|"stale"|"queued"}`. `/devtime:start`'s `get_usage` call is only a fallback.
 - `hooks/unreal_findings.py` (optional, not registered by the plugin; add it to
   `~/.claude/settings.json` yourself): after a call that ran or waited on an Unreal run of a
   project with `[unreal] log_globs`, tells the agent what that run wasted and how to fix it.
@@ -202,6 +218,23 @@ Exact readings also come from the `get_usage` calls that sessions already make: 
 Code transcripts (main and subagent, last 9 days; only the percentages and reset times are kept, cached in
 `~/.claude/devtime/cache/usage_harvest.json`), so no scheduled polling is required.
 **Throughput** shows commits and finished subagents per bucket for the selected range.
+
+**Shares instead of dollars.** `limits.allowance` (also `limits.budget`) in `/api/overview` is the fitted API-equivalent
+dollars per 100 % of the week, `limits.allowanceError` its uncertainty (one standard error, dollars). Wherever an allowance
+exists the dashboard, the band and the pane show costs as "% of week" (cost / allowance): per session, agent, work section,
+spender, live burner, cost per hour (%/h), cost per commit (% per commit), the cost chart; dollars stay in tooltips
+(`title`). Without an allowance (no readings and no `weekly_budget_usd`) everything is in dollars.
+
+**Fit quality.** `limits.fit` holds `samples`, `allowance`, `residual` (largest miss, this-week fits), `sigma` (the residual
+standard error of the reported share around the fitted line, 0-1) and `allowanceError` (the standard error of the fitted
+slope turned into dollars: `se(k) / k^2` for `allowance = 1 / k`); a one-reading estimate has neither. The weekly-limit
+card prints "allowance ~$2,600 ± 200". `limits.fit.byFamily` (with `byFamilySamples`) is only present when the data
+separates the model families: the same samples are refitted with opus / sonnet / haiku / other cost as separate regressors
+(each week its own intercept), `{family: {allowance, error, share of the window's cost}}`. Required: at least 10 samples,
+at least two families with 10 % of the window's cost each (smaller families' cost counts with the largest), regressors that
+are not collinear, and every coefficient positive. It is for reading only: it shows whether the API prices match the plan's
+weighting (equal allowances = they do), and the displayed shares still use the single allowance. The math is in
+`devtime/fit.py`.
 
 The lane under the chart lists the week's large pieces of work. Workstreams (the rules in your project profiles) are
 coarse, so when work **sections** exist they are used instead: the `devtime:labeller` agent (started by the `/devtime:start` loop) runs
@@ -302,7 +335,8 @@ locally (gitignored) only so the rules can be re-applied. The server binds to 12
     devtime/store.py     rescans + rebuilds when transcripts or config change; per-org slices
     devtime/orgs.py      which organisation a transcript belongs to; desktop session index
     devtime/ports.py     the port of this data folder's server (port.txt)
-    devtime/server.py    local HTTP server (/api/projects, /api/data, /api/version, static/)
+    devtime/server.py    local HTTP server (/api/projects, /api/data, /api/version, POST /api/reading, static/)
+    devtime/readings.py  plan readings posted by sessions: validation, dedupe, queue; devtime/fit.py allowance regressions
     devtime/unreal.py    optional Unreal Editor log harvester: phases, activities, script steps, archive
     devtime/report.py    text summary
     devtime/ab.py        A/B experiments: arms by hash, CLAUDE.md block, report (hooks/agent_budget.py enforces)

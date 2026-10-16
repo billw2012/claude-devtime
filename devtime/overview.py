@@ -21,7 +21,7 @@ import statistics
 import time
 import tomllib
 
-from . import orgs, paths
+from . import fit as fitting, orgs, paths
 
 RANGES = {"1h": 3600, "6h": 6 * 3600, "12h": 12 * 3600, "24h": 86400, "7d": 7 * 86400, "30d": 30 * 86400}
 COMMIT = re.compile(r"^\s*(commit|git commit)\b|\bgit\b(\s+-C\s+\S+)?\s+(add\b[^\n]*&&\s*git\b[^\n]*\s)?commit\b",
@@ -831,14 +831,20 @@ def limits(data, idx, settings, now, samples=None, org=None):
     week = [s for s in week if s[0] <= now]
     week = [s for s in week if end - 9 * 86400 <= s[0] <= now]
     lo = min([end - 5 * WEEK] + [s[0] for s in week])  # four earlier weeks too, for the pooled allowance fit
-    reqs = sorted((r[0], r[1]) for t, rows in idx.reqs.items()
+    models = data["models"]
+    fam_of = [fitting.family(m) for m in models]
+    reqs = sorted((r[0], r[1], fam_of[r[5]]) for t, rows in idx.reqs.items()
                   for r in rows[bisect.bisect_left(idx.starts[t], lo - SESSION):])
     ts = [r[0] for r in reqs]
     cum = list(itertools.accumulate((r[1] for r in reqs), initial=0.0))
     spent_to = lambda t: cum[bisect.bisect_right(ts, t)]  # cost of requests from lo - 5 h up to t
+    fam_cum = {f: list(itertools.accumulate((r[1] if r[2] == f else 0.0 for r in reqs), initial=0.0))
+               for f in fitting.FAMILIES}
+    fam_spent = lambda t: {f: fam_cum[f][bisect.bisect_right(ts, t)] for f in fitting.FAMILIES}
 
     # Fit reported share = a + spent_to(t) / allowance over this week's samples.
     fit = None
+    groups = []  # the groups of (time, share) the fit used, for its uncertainty and the per-family fit
     pts = [(spent_to(s[0]), s[2]) for s in week]
     sane = lambda k: k > 0 and (not configured or 0.3 <= 1 / k / configured <= 3)
     if (len(pts) >= 3 and max(p[0] for p in pts) - min(p[0] for p in pts) >= 1
@@ -850,20 +856,22 @@ def limits(data, idx, settings, now, samples=None, org=None):
         if sane(k):
             budget = 1 / k
             fit = {"samples": len(pts), "allowance": budget, "residual": max(abs(my + k * (x - mx) - y) for x, y in pts)}
+            groups = [[(s[0], s[2]) for s in week]]
     if fit is None:  # too little this week: the same fit over the last five weeks, each week its own intercept
-        groups, cur = [], []
+        sets, cur = [], []
         for i, x in enumerate(samples):
             if i and x[2] < samples[i - 1][2] - 0.03 and x[2] < 0.2:  # a weekly reset starts a new group
-                groups.append(cur)
+                sets.append(cur)
                 cur = []
             if lo <= x[0] <= now:
-                cur.append((spent_to(x[0]), x[2]))
-        groups.append(cur)
+                cur.append((x[0], x[2]))
+        sets.append(cur)
         sxy = sxx = 0.0
         n = 0
-        for g in groups:
+        for g in sets:
             if len(g) < 3:
                 continue
+            g = [(spent_to(t), y) for t, y in g]
             gx, gy = statistics.fmean(p[0] for p in g), statistics.fmean(p[1] for p in g)
             sxy += sum((p[0] - gx) * (p[1] - gy) for p in g)
             sxx += sum((p[0] - gx) ** 2 for p in g)
@@ -872,6 +880,16 @@ def limits(data, idx, settings, now, samples=None, org=None):
         if n >= 6 and sane(k):
             budget = 1 / k
             fit = {"samples": n, "allowance": budget, "pooled": True}
+            groups = [[(t, y) for t, y in g] for g in sets if len(g) >= 3]
+    if fit is not None and groups:  # how well the line explains the reported share, and what each model family weighs
+        reg = fitting.regress([[(y, (spent_to(t),)) for t, y in g] for g in groups], 1)
+        if reg and reg["coef"][0] > 0:
+            fit["sigma"] = reg["sigma"]  # residual standard error of the reported share (0..1)
+            fit["allowanceError"] = fitting.allowance(reg["coef"][0], reg["se"][0])[1]
+        fam = fitting.by_family([[(y, fam_spent(t)) for t, y in g] for g in groups])
+        if fam:
+            fit["byFamily"] = fam["families"]
+            fit["byFamilySamples"] = fam["samples"]
     if not budget and pts and pts[-1][1] >= 0.02:  # one reading: spend since the week's first reading over its share
         dc = pts[-1][0] - (spent_to(drop) if drop else spent_to(end - WEEK))
         if dc >= 1:
@@ -931,6 +949,7 @@ def limits(data, idx, settings, now, samples=None, org=None):
         return {"label": label, "from": t0, "perHour": rate, "atReset": share + rate * (end - now) / 3600,
                 "limitAt": hit if hit is not None and hit < end else None}
     return {"start": start, "end": end, "now": now, "step": step, "used": used, "share": share, "budget": budget,
+            "allowance": budget, "allowanceError": fit.get("allowanceError") if fit else None,
             "resetGuessed": bool(guessed),
             "changes": [{"t": t, "label": label} for t, label in changes() if start <= t <= end],
             "work": large_work(data, start, now, budget),

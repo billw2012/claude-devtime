@@ -88,6 +88,28 @@ def make_handler(store):
                 body = json.dumps({"error": error.message}).encode()
                 self.send(error.status, body, "application/json")
 
+        def do_POST(self):
+            url = urlparse(self.path)
+            if url.path != "/api/reading":
+                return self.send(404, b"not found", "text/plain")
+            # Sessions on this machine only: loopback peer, a loopback Host (no DNS rebinding) and a JSON body (a
+            # browser page cannot send one cross-origin without a preflight, which this server never answers).
+            host = self.headers.get("Host", "").rsplit(":", 1)[0].strip("[]")
+            ctype = self.headers.get("Content-Type", "").split(";")[0].strip().lower()
+            if self.client_address[0] not in ("127.0.0.1", "::1") or host not in ("127.0.0.1", "localhost", "::1"):
+                return self.send(403, b'{"error":"local requests only"}', "application/json")
+            if ctype != "application/json":
+                return self.send(415, b'{"error":"send application/json"}', "application/json")
+            try:
+                size = int(self.headers.get("Content-Length", "0"))
+                body = json.loads(self.rfile.read(size)) if 0 < size <= 4096 else None
+            except ValueError:
+                body = None
+            outcome = store.record_reading(body)
+            if outcome is None:
+                return self.send(400, b'{"error":"not a reading"}', "application/json")
+            self.json({"result": outcome})
+
         def route(self):
             url = urlparse(self.path)
             query = parse_qs(url.query)

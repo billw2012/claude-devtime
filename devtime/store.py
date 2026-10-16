@@ -1,16 +1,22 @@
 """Keeps the dataset current: rescans transcripts incrementally and rebuilds when anything (or the config) changed."""
 
+import glob
 import os
 import pickle
 import threading
 import time
 
-from . import alerts, analyze, orgs, scan, unreal
+from . import alerts, analyze, orgs, readings, scan, unreal
 from .config import Config
 
 
+def overview_samples():
+    from . import overview
+    return overview.PLAN_SAMPLES
+
+
 class Store:
-    def __init__(self, root=None, verbose=True):
+    def __init__(self, root=None, verbose=True, plan_samples_path=None):
         self.config = Config(root) if root else Config()
         self.cache = scan.Cache(self.config.path("cache_dir"))
         self.lock = threading.Lock()
@@ -24,6 +30,7 @@ class Store:
         self.last_save = 0.0
         self.desktop_orgs = {}
         self.save_every = 60.0
+        self.readings = readings.Readings(plan_samples_path or overview_samples())
         self.alerts = alerts.Alerts(os.path.join(self.config.path("cache_dir"), "alerts.json"))
 
     def log(self, *args):
@@ -81,8 +88,10 @@ class Store:
                 self.log(f"scan {changed} changed files in {t1 - t0:.1f}s, build {time.time() - t1:.1f}s, "
                          f"{len(self.data['transcripts'])} transcripts, {len(self.data['iv']['t'])} intervals")
                 self.last_scan = time.time()
+                self._flush_readings()
                 return True
             self.last_scan = time.time()
+            self._flush_readings()
             return False
 
     def _blocks_path(self):
@@ -154,3 +163,36 @@ class Store:
             if t["role"] == "main" and t.get("session") == session_id and t.get("org") != orgs.UNKNOWN:
                 return t["org"]
         return orgs.desktop_index(self.config.settings).get(session_id)
+
+    # ---- readings reported by sessions ----
+    def _flush_readings(self):
+        if self.readings.pending:
+            try:
+                self.readings.flush(self.session_org)
+            except Exception as error:  # a bad queue entry must not stop the scan
+                self.log("readings:", repr(error))
+
+    def session_org(self, session_id):
+        """The org of a session id: the scanned transcripts, the desktop index, else the transcript file's own
+        credential_org tag (a session that started since the last scan). None if unknown."""
+        found = self.org_of_session(session_id)
+        if found:
+            return found
+        s = self.config.settings
+        base = os.path.expanduser(s.get("projects_dir", "~/.claude/projects"))
+        if not session_id or any(c in session_id for c in "/\\*?[]") or ".." in session_id:
+            return None
+        for path in glob.glob(os.path.join(glob.escape(base), "*", glob.escape(session_id) + ".jsonl")):
+            tag = orgs.read_tag(path)
+            if tag:
+                return tag
+        return None
+
+    def record_reading(self, body):
+        """Stores (or queues) a reading posted by a session. Returns the outcome word, or None if the body is no reading."""
+        reading = readings.parse(body)
+        if reading is None:
+            return None
+        outcome = self.readings.add(reading, self.session_org(reading["session"]))
+        self._flush_readings()
+        return outcome

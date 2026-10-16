@@ -32,6 +32,19 @@ function fmtDur(s) {
 const fmtHours = (s) => (s / 3600 >= 100 ? (s / 3600).toFixed(0) : (s / 3600).toFixed(1)) + " h";
 const fmtPct = (x) => (x >= 0.1 ? (100 * x).toFixed(0) : (100 * x).toFixed(1)) + " %";
 const fmtMoney = (x) => "$" + (x >= 100 ? Math.round(x).toLocaleString() : x.toFixed(2));
+// Costs show as a share of the weekly limit ("% of week") once the plan's readings give an allowance (dollars per
+// 100 % of the week, from /api/overview limits.allowance); dollars stay in the tooltip. Without one: dollars.
+let allowance = null;
+const fmtWeek = (x) => { const v = 100 * x / allowance; return `${v >= 10 ? v.toFixed(0) : v >= 1 ? v.toFixed(1) : v.toFixed(2)} %`; };
+const fmtCostText = (x) => (allowance > 0 ? fmtWeek(x) : fmtMoney(x));
+const fmtCost = (x) => (allowance > 0 ? el("span", { title: `${fmtMoney(x)} API-equivalent` }, fmtWeek(x)) : fmtMoney(x));
+const costLabel = (label = "Cost") => (allowance > 0 ? `${label} (% of week)` : label);
+async function loadAllowance() {
+  try {
+    const o = await getJSON("/api/overview?range=24h");
+    allowance = o.limits && o.limits.allowance > 0 ? o.limits.allowance : null;
+  } catch (e) { allowance = null; }
+}
 function fmtNum(x) {
   if (x >= 1e9) return (x / 1e9).toFixed(1) + "B";
   if (x >= 1e6) return (x / 1e6).toFixed(1) + "M";
@@ -305,7 +318,7 @@ function renderTiles() {
     tile("Model", A.agent ? fmtPct(model / A.agent) : "–", `${fmtHours(model)} · thinking ${fmtDur(A.thinkMs / 1000)}`),
     tile(topTool ? `Top tool: ${topTool[0]}` : "Top tool", topTool && A.agent ? fmtPct(topTool[1] / A.agent) : "–", topTool ? fmtHours(topTool[1]) : ""),
     tile("Tokens out", fmtNum(A.outTok), `cache read ${fmtNum(A.cacheRead)}`),
-    tile("Estimated cost", fmtMoney(A.cost), A.agent ? `${fmtMoney(A.cost / (A.agent / 3600))} per agent hour` : ""),
+    tile(costLabel("Estimated cost"), fmtCostText(A.cost), A.agent ? `${fmtCostText(A.cost / (A.agent / 3600))} per agent hour${allowance > 0 ? ` (${fmtMoney(A.cost)} API-equivalent)` : ""}` : ""),
     tile("Live", String(live), live ? "transcripts written in the last 5 min" : "nothing running"),
   );
 }
@@ -501,7 +514,7 @@ function renderWorkstreams() {
     { key: "share", label: "Share", num: true, sortv: (r) => r.busy, render: (r) => fmtPct(r.busy / (A.agent || 1)) },
     { key: "mix", label: "Mix", sortv: (r) => r.busy, render: (r) => mini(busyKinds(r.o), 140) },
     { key: "agents", label: "Subagents", num: true },
-    { key: "cost", label: "Cost", num: true, render: (r) => fmtMoney(r.cost) },
+    { key: "cost", label: costLabel(), num: true, render: (r) => fmtCost(r.cost) },
   ], rows, { sort: "busy", onclick: (r) => setFilter("ws", S.f.ws === r.name ? "" : r.name) });
 }
 
@@ -543,7 +556,7 @@ function renderSubagents() {
     { key: "mix", label: "Mix", sortv: (r) => r.busy, render: (r) => mini(busyKinds(r.o), 140) },
     { key: "top", label: "Top kinds", cls: "label", sortv: (r) => r.busy, render: (r) => topKinds(r.o) },
     { key: "model", label: "Model", render: (r) => r.model.replace(/^claude-/, "") },
-    { key: "cost", label: "Cost", num: true, render: (r) => fmtMoney(r.cost) },
+    { key: "cost", label: costLabel(), num: true, render: (r) => fmtCost(r.cost) },
     { key: "start", label: "Started", num: true, render: (r) => fmtWhen(r.start) },
   ], rows, { sort: "busy", onclick: (r) => focusTranscript(r.t) });
 }
@@ -599,7 +612,7 @@ function renderModels() {
     { key: "cr", label: "Cache read", num: true, render: (r) => fmtNum(r.cr) },
     { key: "cw", label: "Cache write", num: true, render: (r) => fmtNum(r.cw) },
     { key: "in", label: "Input", num: true, render: (r) => fmtNum(r.in) },
-    { key: "cost", label: "Cost", num: true, render: (r) => fmtMoney(r.cost) },
+    { key: "cost", label: costLabel(), num: true, render: (r) => fmtCost(r.cost) },
   ], rows, { sort: "cost" });
 }
 
@@ -610,7 +623,7 @@ function renderBranches() {
     { key: "name", label: "Branch", cls: "label" },
     { key: "busy", label: "Agent time", num: true, render: (r) => fmtDur(r.busy) },
     { key: "mix", label: "Mix", sortv: (r) => r.busy, render: (r) => mini(busyKinds(r.o), 140) },
-    { key: "cost", label: "Cost", num: true, render: (r) => fmtMoney(r.cost) },
+    { key: "cost", label: costLabel(), num: true, render: (r) => fmtCost(r.cost) },
     { key: "last", label: "Last active", num: true, render: (r) => fmtWhen(r.last) },
   ], rows, { sort: "busy", onclick: (r) => setFilter("branch", S.f.branch === r.name ? "" : r.name) });
 }
@@ -1056,7 +1069,7 @@ async function loadProjects() {
 async function loadData(keepView) {
   $("#main").classList.add("loading");
   try {
-    const data = await getJSON(`/api/data?project=${encodeURIComponent(S.project)}`);
+    const [data] = await Promise.all([getJSON(`/api/data?project=${encodeURIComponent(S.project)}`), loadAllowance()]);
     const first = !S.data || S.data.project !== data.project;
     S.data = data; S.version = data.version; S.prep = prepare(data);
     S.ue = prepUE(data);

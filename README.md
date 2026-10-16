@@ -42,6 +42,13 @@ Then restart Claude Code (or run `/reload-plugins`) and run `/devtime:start`. In
 Or ask Claude Code to do it: open a session in a clone of this repo and say "set this up"; it follows
 [INSTALL.md](INSTALL.md).
 
+## Organisations
+
+If you are signed into several Claude organisations, each gets its own devtime: separate data, server, port and
+dashboard (the page shows the org's name), and nothing of one org is visible to another. Run `/devtime:start` in a
+session of each org you want to track; `python -m devtime org` shows which org and port a shell uses. Settings in
+`~/.claude/devtime/config` are shared.
+
 ## Skills
 
 **`/devtime:start`** sets everything up the first time and keeps it running. It checks Python and, with your confirmation, adds a

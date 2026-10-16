@@ -441,7 +441,7 @@ function renderExperiments(o) {
 
 // ------------------------------------------------------------------------------------------------------------- load
 async function getJSON(url) {
-  const r = await fetch(withOrg(url));
+  const r = await fetch(url);
   if (!r.ok) throw new Error(`${url}: ${r.status}`);
   return r.json();
 }

@@ -42,14 +42,12 @@ If the args are exactly `tick`, do only the **pass** below (no setup, no browser
    if the tool `mcp__ccd_session_mgmt__get_usage` exists, call it (load it with ToolSearch query
    `select:mcp__ccd_session_mgmt__get_usage` if it is deferred; skip silently if unavailable). The dashboard picks the
    reading up from the transcript; ignore its output. Otherwise skip this step.
-2. Run `python -m devtime tick --session ${CLAUDE_SESSION_ID}` (JSON: url, org, reading, labels, review, alerts, cap,
-   setup). One account can be signed into several organisations that share `~/.claude`; the pass is scoped to the
-   organisation of THIS session (`org`), so nothing of another organisation is read, labelled or reviewed. If the
-   literal text `${CLAUDE_SESSION_ID}` was not substituted, leave out `--session`: the most recently active
-   organisation is used and the JSON says so in `orgNote` (mention it in the reply line).
+2. Run `python -m devtime tick` (JSON: url, org, reading, labels, review, alerts, cap, setup). Each organisation on
+   this PC has its own devtime (own data, server and port), and the pass works on the organisation this session is
+   signed into. If the JSON says `"refused": true` (no organisation could be determined), tell the user why (its
+   `error`), do not start or continue the loop, and stop. Mention once that every other organisation on the PC needs
+   `/devtime:start` run in a session of that organisation to be tracked.
 3. If `labels` > 0, launch the agent `devtime:labeller` in the foreground. If `review.due` is true, launch
    `devtime:reviewer` likewise. If the scoped name is not found, try `labeller` / `reviewer`. Prompt: "Plugin root:
-   ${CLAUDE_PLUGIN_ROOT}; run commands from there. Org: <the `org` from the tick JSON>; pass `--org <org>` to every
-   devtime command."
-4. Reply with ONE line: weekly % (from `reading`, or "no reading"), labels done, notes left, URL (plus the `orgNote`
-   if there is one).
+   ${CLAUDE_PLUGIN_ROOT}; run commands from there."
+4. Reply with ONE line: weekly % (from `reading`, or "no reading"), labels done, notes left, URL.

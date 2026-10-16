@@ -272,33 +272,42 @@ copy whose session went on longest.
 
 ## Organisations and ports
 
-One account can be signed into several organisations in the Claude desktop app. They all write to `~/.claude/projects` and
-share `CLAUDE.md`, settings and plugins, so devtime separates them itself, and each has its own plan limits. A transcript's
-org is, in this order: its own `credential_org` record (`{"type": "attachment", "attachment": {"type": "credential_org",
-"organizationUuid": ...}}`), the desktop app's session index (`<desktop dir>/claude-code-sessions/<account>/<org>/local_*.json`
-and `local-agent-mode-sessions/...`, matched by `cliSessionId`), its parent session's org (subagents), else `unknown`
-(`devtime/orgs.py`). The desktop dir is `desktop_dir` in `[settings]` or env `DEVTIME_DESKTOP_DIR`, else the app's folder
-for the OS (`%APPDATA%\Claude`, `~/Library/Application Support/Claude`, `~/.config/Claude`).
+One account can be signed into several organisations in the Claude desktop app; they all write to `~/.claude/projects` and
+share `CLAUDE.md`, settings and plugins, and each has its own plan limits. devtime therefore runs one fully segregated
+instance per organisation.
 
-Every API endpoint that returns transcript-derived data (`/api/overview`, `/api/data`, `/api/watch`, `/api/tick`,
-`/api/alerts`, `/api/projects`) takes `org=<uuid or short prefix>`; without it, the org of the most recently active
-transcript is used. Data of other orgs never appears in a scoped response (alerts, spenders, live work, work items, review
-summaries, plan readings and the pace are all per org). `org=all` is refused with 403 unless `allow_all_orgs = true` is set
-in `[settings]`. `/api/orgs` lists `[{id (first 8 characters), name, sessions, last}]`; names come from an `[orgs]` table in
-`devtime.toml` mapping the 8-character prefix to a name. The dashboard shows an org picker when there is more than one org
-and remembers the choice in `localStorage`.
+**Which org is "current".** `devtime/paths.py` picks it when the process starts: env `CLAUDE_CODE_ORGANIZATION_UUID` if set
+(Claude Code sets it for sessions and hooks), else `oauthAccount.organizationUuid` in `~/.claude.json`. `python -m devtime org`
+prints the org, where it came from, its name, the instance folder, the port and whether its server answers. With no org
+(neither source) commands that need data print `{"refused": true, "error": ...}` and exit 2; `/devtime:start` stops then.
 
-Plan readings (`get_usage` results harvested from transcripts) belong to the org of the transcript they came from; a reading
-recorded by hand (`devtime plan-sample`) belongs to `unknown` unless given `--org`. `/devtime:start` scopes its pass to its own
-session's org: `python -m devtime tick --session <cli session id>` resolves it (the skill passes `${CLAUDE_SESSION_ID}`; if the
-id is unknown the most recent org is used and the JSON says so in `orgNote`), returns it as `org`, and the labeller and
-reviewer pass `--org` to `work-items`, `work-assign`, `review-context` and `review-note`.
+**Per org** (`<data dir>/orgs/<org uuid>/`): the cache (`cache_dir`: transcript caches, alerts, plan readings, work sections,
+review notes and log, `port.txt`, `server.log`), its own server and port, its own dashboard, alerts, plan readings and pace.
+**Shared** (in the data dir, `~/.claude/devtime`): `config/` (settings, project profiles, `experiments.toml`, `changes.toml`
+and the optimization ledger `installed.json`), `logs/`, and the stable launcher `devtime.py` with `plugin_root.txt`. A transcript's org is, in this
+order: its own `credential_org` record (`{"type": "attachment", "attachment": {"type": "credential_org", "organizationUuid":
+...}}`), the desktop app's session index (`<desktop dir>/claude-code-sessions/<account>/<org>/local_*.json` and
+`local-agent-mode-sessions/...`, matched by `cliSessionId`), its parent session's org (subagents), else `unknown`
+(`devtime/orgs.py`). The desktop dir is `desktop_dir` in `[settings]` or env `DEVTIME_DESKTOP_DIR`, else the app's folder for the
+OS (`%APPDATA%\Claude`, `~/Library/Application Support/Claude`, `~/.config/Claude`). An instance only reads transcripts of its
+own org; `include_unknown_org = true` in `[settings]` also counts the `unknown` ones (default false, so they are left out).
 
-Each data folder has its own dashboard: `/api/version` returns `home`, the first 12 hex characters of the SHA-1 of the absolute
-data directory, and a server only counts as yours if that matches (two Windows users on one PC never see each other's
-dashboard). `settings.port` (default 8765) is kept when it is yours or free; if another folder's server holds it, the next free
-port of port+1..port+20 is used and recorded in `<data dir>/cache/port.txt`, which setup, tick, the hooks and the server read
-(`devtime/ports.py`). A server started before this change reports no `home`, so it is not recognised: restart it.
+**The server refuses other orgs.** An API request that names a session or org that is not this instance's gets 403
+(`/api/version` is always answered and returns `home`, `org` and `orgName`; the dashboard shows `orgName` as a pill). There is
+no org selector, `org=` parameter or org listing endpoint, and the CLI has no `--org` / `--session` options. The hooks
+post to and read only their own org's verified server, and alerts reach only sessions of that org. To track another org, run
+`/devtime:start` in a session of that org: it starts that org's instance on its own port.
+
+**Migration.** The pre-0.4.0 cache (`<data dir>/cache`, shared by all orgs) is split once by `devtime/migrate.py`, run by
+`devtime tick` and `devtime serve`: what cannot be rebuilt (plan readings, review notes, work sections, review log and state)
+moves to the instance of the org it belongs to, by each row's org or its transcript's org; rows with no org are only moved on a
+single-org machine. Everything rebuildable is dropped and the old folder is removed.
+
+**Ports.** `/api/version` returns `home`, the first 12 hex characters of the SHA-1 of the instance folder, and a server only
+counts as yours if that matches (other orgs, and other Windows users on one PC, never see each other's dashboard).
+`settings.port` (default 8765) is kept when it is yours or free; if another instance holds it, the next free port of
+port+1..port+20 is used and recorded in `<instance>/cache/port.txt`, which setup, tick, the hooks and the server read
+(`devtime/ports.py`).
 
 ## Projects, rules and workstreams
 

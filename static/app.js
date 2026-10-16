@@ -105,7 +105,7 @@ const isOther = (kind) => !WAIT_COLORS[kind] && !(S.colors[S.project] || {})[kin
 
 // ---------------------------------------------------------------------------------------------------------- data
 async function getJSON(url) {
-  const r = await fetch(withOrg(url), { cache: "no-store" });
+  const r = await fetch(url, { cache: "no-store" });
   if (!r.ok) throw new Error(`${url}: ${r.status}`);
   return r.json();
 }

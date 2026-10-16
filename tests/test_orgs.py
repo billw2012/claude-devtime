@@ -224,7 +224,8 @@ class Readings(Fixture):
             out = overview.tick_summary(self.store.slice("*", org), self.store.config.settings, [], now, org)
             self.assertEqual(out["reading"]["weekly"], week)
         data = self.store.slice("*", ORG_A)
-        plan = overview.limits(data, overview.Index(data), self.store.config.settings, NOW, org=ORG_A)
+        settings = dict(self.store.config.settings, weekly_budget_usd=5000)  # the fixture has too little cost to fit one
+        plan = overview.limits(data, overview.Index(data), settings, NOW, org=ORG_A)
         self.assertEqual(round(plan["reading"]["share"], 2), 0.41)
 
 

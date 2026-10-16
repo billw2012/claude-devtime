@@ -23,7 +23,7 @@ poll_s = 10               # server re-scans transcripts this often
 # default_project = "MyProject"
 # Rough weekly plan allowance in API-equivalent USD, for the overview's weekly-limit chart. Only a starting point: once
 # usage readings are available (from get_usage calls, or the desktop app's usage history) the allowance is fitted from them.
-weekly_budget_usd = 5000
+# weekly_budget_usd = 5000   # only if no usage readings exist: the allowance is fitted from the plan's readings
 # Optional: any instant the plan's weekly limit resets (your usage page shows it); resets repeat every 7 days. Not needed
 # when readings carry the reset time.
 # weekly_reset = "2026-01-02T00:00:00Z"

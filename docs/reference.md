@@ -196,7 +196,7 @@ weekly allowance, the limit itself, and two projections to the next reset: at th
 the pace since the current 5-hour session window opened (a dot marks where each would hit the limit). The share is
 calibrated against the Claude desktop app's own usage samples (`plan_usage_history`, which holds only the 5-hour and
 weekly percentages): since the last weekly drop, reported share = a + cost / allowance is fitted, giving the allowance
-in API-equivalent dollars; the samples are drawn as dots. The next reset comes from the readings that carry one, else from `weekly_reset`; `weekly_budget_usd` is only the starting allowance before a fit. 5-hour windows are
+in API-equivalent dollars; the samples are drawn as dots. The next reset comes from the readings that carry one, else from `weekly_reset`; The allowance is fitted from the readings: this week's, else the last five weeks' (one intercept per week), else spend over the latest reading's share; `weekly_budget_usd` (not set by default) is used only when there is nothing to fit, and bounds a fit to 0.3-3x when set. 5-hour windows are
 chained from request times and re-anchored where the reported 5-hour share drops, so they are approximate.
 Exact readings also come from the `get_usage` calls that sessions already make: the dashboard picks them out of the Claude
 Code transcripts (main and subagent, last 9 days; only the percentages and reset times are kept, cached in

@@ -808,10 +808,9 @@ def limits(data, idx, settings, now, samples=None, org=None):
     as a + cost / allowance, which gives the allowance in API-equivalent dollars and when the week really started.
     Without it, weekly_budget_usd and the 7 days before the reset are used. A 5-hour window starts where the
     reported 5-hour share drops (when sampled), else at the first request after the previous window closed."""
-    budget = float(settings.get("weekly_budget_usd") or 0)
+    configured = float(settings.get("weekly_budget_usd") or 0)
+    budget = configured
     anchor = settings.get("weekly_reset")
-    if not budget:
-        return None
     samples = plan_samples(settings, org) if samples is None else samples
     exact = [s for s in samples if s[4]]
     guessed = None
@@ -831,7 +830,7 @@ def limits(data, idx, settings, now, samples=None, org=None):
         week.append(s)
     week = [s for s in week if s[0] <= now]
     week = [s for s in week if end - 9 * 86400 <= s[0] <= now]
-    lo = min([end - WEEK - 2 * 86400] + [s[0] for s in week])
+    lo = min([end - 5 * WEEK] + [s[0] for s in week])  # four earlier weeks too, for the pooled allowance fit
     reqs = sorted((r[0], r[1]) for t, rows in idx.reqs.items()
                   for r in rows[bisect.bisect_left(idx.starts[t], lo - SESSION):])
     ts = [r[0] for r in reqs]
@@ -841,14 +840,45 @@ def limits(data, idx, settings, now, samples=None, org=None):
     # Fit reported share = a + spent_to(t) / allowance over this week's samples.
     fit = None
     pts = [(spent_to(s[0]), s[2]) for s in week]
-    if len(pts) >= 3 and max(p[0] for p in pts) - min(p[0] for p in pts) >= 200:
+    sane = lambda k: k > 0 and (not configured or 0.3 <= 1 / k / configured <= 3)
+    if (len(pts) >= 3 and max(p[0] for p in pts) - min(p[0] for p in pts) >= 1
+            and max(p[1] for p in pts) - min(p[1] for p in pts) >= 0.03):
         mx = statistics.fmean(p[0] for p in pts)
         my = statistics.fmean(p[1] for p in pts)
         sxx = sum((p[0] - mx) ** 2 for p in pts)
-        k = sum((p[0] - mx) * (p[1] - my) for p in pts) / sxx
-        if k > 0 and 0.3 <= 1 / k / budget <= 3:
+        k = sum((p[0] - mx) * (p[1] - my) for p in pts) / sxx if sxx else 0
+        if sane(k):
             budget = 1 / k
             fit = {"samples": len(pts), "allowance": budget, "residual": max(abs(my + k * (x - mx) - y) for x, y in pts)}
+    if fit is None:  # too little this week: the same fit over the last five weeks, each week its own intercept
+        groups, cur = [], []
+        for i, x in enumerate(samples):
+            if i and x[2] < samples[i - 1][2] - 0.03 and x[2] < 0.2:  # a weekly reset starts a new group
+                groups.append(cur)
+                cur = []
+            if lo <= x[0] <= now:
+                cur.append((spent_to(x[0]), x[2]))
+        groups.append(cur)
+        sxy = sxx = 0.0
+        n = 0
+        for g in groups:
+            if len(g) < 3:
+                continue
+            gx, gy = statistics.fmean(p[0] for p in g), statistics.fmean(p[1] for p in g)
+            sxy += sum((p[0] - gx) * (p[1] - gy) for p in g)
+            sxx += sum((p[0] - gx) ** 2 for p in g)
+            n += len(g)
+        k = sxy / sxx if sxx else 0
+        if n >= 6 and sane(k):
+            budget = 1 / k
+            fit = {"samples": n, "allowance": budget, "pooled": True}
+    if not budget and pts and pts[-1][1] >= 0.02:  # one reading: spend since the week's first reading over its share
+        dc = pts[-1][0] - (spent_to(drop) if drop else spent_to(end - WEEK))
+        if dc >= 1:
+            budget = dc / pts[-1][1]
+            fit = {"samples": 1, "allowance": budget, "single": True}
+    if not budget:
+        return None
     if week:
         offset = pts[-1][1] - pts[-1][0] / budget  # through the latest reading
     else:

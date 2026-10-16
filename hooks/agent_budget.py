@@ -12,9 +12,10 @@ a subagent only:
    agent to hand the job back to the main session and end.
 2. Past CONTEXT_NUDGE tokens of context (then every CONTEXT_STEP more) the agent is told to finish its step and end
    with a handoff so a fresh agent continues small.
-3. Usage alerts (devtime/alerts.py, written by the dashboard server to <data dir>/cache/alerts.json): each new alert is passed
-   once to the subagent it is about and to its main session, which can stop it, re-brief it or take its jobs over.
-   This part also runs in main sessions.
+3. Usage alerts (devtime/alerts.py, written by the session's org's dashboard server to
+   <data dir>/orgs/<org>/cache/alerts.json): each new alert is passed once to the subagent it is about and to its main
+   session, which can stop it, re-brief it or take its jobs over. This part also runs in main sessions. Only the
+   instance of the session's own org is read (devtime/paths.py); if the org can't be determined, no alert is delivered.
 
 Registered by the plugin's hooks/hooks.json (PreToolUse "*", PostToolUse "Bash|PowerShell|TaskOutput|Monitor"); run
 through hooks/run.sh so the right Python is found.
@@ -180,7 +181,10 @@ MAIN_ONLY = {"big context", "read-only on a big model", "untagged coding stage"}
 
 
 def pending_alerts(session_id, agent_id, state):
-    """New usage alerts for this subagent (about itself) or this main session (about itself or its subagents)."""
+    """New usage alerts for this subagent (about itself) or this main session (about itself or its subagents), from
+    the instance of this session's org only."""
+    if not paths.ORG:
+        return []
     try:
         with open(ALERTS, encoding="utf-8") as handle:
             items = json.load(handle).get("alerts", [])

@@ -8,6 +8,7 @@ import types
 import unittest
 from unittest import mock
 
+import isolate  # noqa: F401  (before devtime: a throw-away home)
 from devtime import fit, overview
 
 H = 3600
@@ -79,7 +80,7 @@ class Limits(unittest.TestCase):
 
     def limits(self, *args, **kw):
         data, idx, samples, now = synthetic(*args, **kw)
-        return overview.limits(data, idx, {}, now, samples=samples, org="o")
+        return overview.limits(data, idx, {}, now, samples=samples)
 
     def test_allowance_uncertainty_is_reported(self):
         plan = self.limits(3000.0, 3000.0)

@@ -198,6 +198,8 @@ def check(projects=True):
                      "duplicateHooks": find_hook_duplicates(settings),
                      "autoCompactWindow": env.get("CLAUDE_CODE_AUTO_COMPACT_WINDOW")},
         "dataDir": paths.DATA, "pluginRoot": ROOT,
+        "org": {"id": paths.ORG, "name": paths.org_name(paths.ORG), "source": paths.ORG_SOURCE,
+                "instance": paths.INSTANCE},
     }
     if projects:
         try:

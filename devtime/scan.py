@@ -19,7 +19,7 @@ from concurrent.futures import ProcessPoolExecutor
 
 from . import orgs
 
-CACHE_VERSION = 7  # 7: FileState.org
+CACHE_VERSION = 8  # 7: FileState.org; 8: per-org instances, org tags of every transcript
 
 SHELL_TOOLS = ("Bash", "PowerShell")
 TASK_ID_RE = re.compile(r"<task-id>([^<\s]+)</task-id>")
@@ -364,25 +364,35 @@ class Cache:
     def __init__(self, cache_dir):
         self.cache_dir = cache_dir
         self.path = os.path.join(cache_dir, "transcripts.pickle")
-        self.states = {}
+        self.states = {}  # only transcripts of this instance's org(s)
+        self.tags = {}  # every transcript: (offset searched, org tag or None), see orgs.scan_tag
         if os.path.exists(self.path):
             try:
                 with open(self.path, "rb") as handle:
-                    version, states = pickle.load(handle)
+                    version, states, tags = pickle.load(handle)
                 if version == CACHE_VERSION:
-                    self.states = states
+                    self.states, self.tags = states, tags
             except Exception:
-                self.states = {}
+                self.states, self.tags = {}, {}
 
     def save(self):
         os.makedirs(self.cache_dir, exist_ok=True)
         tmp = self.path + ".tmp"
         with open(tmp, "wb") as handle:
-            pickle.dump((CACHE_VERSION, self.states), handle, protocol=pickle.HIGHEST_PROTOCOL)
+            pickle.dump((CACHE_VERSION, self.states, self.tags), handle, protocol=pickle.HIGHEST_PROTOCOL)
         os.replace(tmp, self.path)
 
+    def orgs_of(self, discovered, index):
+        """{path: org} of every discovered transcript (orgs.classify); forgets the tags of files that are gone."""
+        found = orgs.classify(discovered, self.tags, index)
+        for path in list(self.tags):
+            if path not in found:
+                del self.tags[path]
+        return found
+
     def refresh(self, paths, workers=None):
-        """Brings every path up to date; returns the number of files that changed."""
+        """Brings every path up to date (and drops every other file's state); returns the number of files that
+        changed. Only the paths of this instance's org(s) are passed in."""
         stale = []
         for path in paths:
             state = self.states.get(path)

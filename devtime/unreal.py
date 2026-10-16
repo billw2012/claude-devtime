@@ -12,8 +12,8 @@ Lines a script logs itself (LogPython "[Tag] message") also give script steps: t
 line, labelled with the message normalised (numbers -> #), so the slow checks of a capture script stand out.
 
 Unreal and Claude Code both delete these logs (purged backups, overwritten names, cleaned scratchpads), so every run
-is summarised as soon as its log is seen and the raw log is archived to <data dir>/logs; the summaries are cached in
-<data dir>/cache/unreal.pickle and re-derived from the archive when the rules change.
+is summarised as soon as its log is seen and the raw log is archived to <data dir>/logs (shared by every org); the
+summaries are cached in the org instance's cache/unreal.pickle and re-derived from the archive when the rules change.
 """
 
 import glob
@@ -23,6 +23,8 @@ import os
 import pickle
 import re
 import time
+
+from . import paths
 
 LINE = re.compile(r"^\[(\d{4})\.(\d\d)\.(\d\d)-(\d\d)\.(\d\d)\.(\d\d):(\d{3})\]\[\s*(\d+)\](\w+):\s?(.*)")
 CMDLINE = re.compile(r"LogInit: Command Line:\s*(.*)")
@@ -260,7 +262,7 @@ class Harvester:
     def __init__(self, config):
         self.config = config
         self.cache_path = os.path.join(config.path("cache_dir"), "unreal.pickle")
-        self.archive_dir = os.path.join(os.path.dirname(config.path("cache_dir")), "logs")
+        self.archive_dir = paths.LOGS  # shared by every org: the logs are the machine's
         self.files = {}  # path -> (size, mtime, key)
         self.runs = {}  # key -> run dict (with "project", "source", "archive")
         self.rules_stamp = None

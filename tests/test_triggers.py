@@ -10,6 +10,8 @@ import tempfile
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import isolate  # noqa: E402,F401  (before devtime: a throw-away home)
 from devtime import scan  # noqa: E402
 
 

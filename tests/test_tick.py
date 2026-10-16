@@ -14,6 +14,8 @@ import unittest
 from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import isolate  # noqa: E402,F401  (before devtime: a throw-away home)
 from devtime import __main__ as cli, paths, tick  # noqa: E402
 
 
@@ -22,7 +24,8 @@ class Base(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.cache = os.path.join(self.tmp.name, "cache")
-        for target, value in ((paths, {"CACHE": self.cache, "DATA": self.tmp.name}),):
+        for target, value in ((paths, {"CACHE": self.cache, "DATA": self.tmp.name,
+                                       "LEGACY_CACHE": os.path.join(self.tmp.name, "legacy")}),):
             patcher = mock.patch.multiple(target, **value)
             patcher.start()
             self.addCleanup(patcher.stop)
@@ -38,7 +41,8 @@ class Base(unittest.TestCase):
 
 
 class Tick(Base):
-    numbers = {"reading": {"weekly": 41.0, "fiveHour": 12.0, "ageMin": 7}, "labels": 3, "alerts": 1}
+    numbers = {"reading": {"weekly": 41.0, "fiveHour": 12.0, "ageMin": 7}, "labels": 3, "alerts": 1,
+               "org": paths.ORG}
 
     def test_shape_server_unreachable(self):
         with mock.patch.object(tick.setup, "ensure_server", return_value=("http://127.0.0.1:1/", False)), \
@@ -50,6 +54,39 @@ class Tick(Base):
         self.assertEqual(out["review"], {"due": True, "lastAt": None})
         self.assertIsNone(out["cap"])
         self.assertFalse(out["setup"])
+        self.assertEqual(out["org"]["id"], paths.ORG)
+
+    def test_another_orgs_server_is_not_used(self):
+        theirs = dict(self.numbers, org="dddd4444-0000-4000-8000-000000000004")
+        with mock.patch.object(tick.setup, "ensure_server", return_value=("http://x/", True)), \
+                mock.patch.object(tick, "server_json", return_value=theirs), \
+                mock.patch.object(tick, "local_store") as local:
+            local.return_value.slice.return_value = {"transcripts": [], "org": paths.ORG}
+            local.return_value.alerts.list.return_value = []
+            out = json.loads(self.capture(tick.tick))
+        local.assert_called_once()
+        self.assertEqual(out["alerts"], 0)
+
+    def test_refused_without_an_org(self):
+        with mock.patch.object(paths, "ORG", None), mock.patch.object(tick.setup, "ensure_server") as ensure:
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                code = tick.tick()
+        self.assertEqual(code, 2)
+        self.assertTrue(json.loads(out.getvalue())["refused"])
+        ensure.assert_not_called()
+
+    def test_cli_refuses_data_commands_without_an_org(self):
+        with mock.patch.object(paths, "ORG", None):
+            for argv in (["report"], ["work-items"], ["review-context"], ["analyze"], ["setup", "check"],
+                         ["review-note", "--session", "x", "--text", "y"]):
+                out = io.StringIO()
+                with contextlib.redirect_stdout(out):
+                    code = cli.main(argv)
+                self.assertEqual(code, 2, argv)
+                self.assertTrue(json.loads(out.getvalue())["refused"], argv)
+            out = self.capture(cli.main, ["org"])
+        self.assertIsNone(json.loads(out)["org"])
 
     def test_server_numbers_and_claude_md(self):
         with open(os.path.join(self.tmp.name, "CLAUDE.md"), "w", encoding="utf-8") as f:
@@ -86,7 +123,7 @@ class Review(Base):
             self.capture(tick.review_done, "line %d" % i)
         with mock.patch.object(tick, "watch_summary", return_value={"mains": []}) as w:
             out = json.loads(self.capture(tick.review_context, 2.0))
-        w.assert_called_once_with(2.0, None)
+        w.assert_called_once_with(2.0)
         self.assertEqual(out["watch"]["mains"], [])
         self.assertEqual(out["watch"]["subagents"], [])
         self.assertEqual(len(out["reviewLog"]), tick.LOG_TAIL)
@@ -97,14 +134,18 @@ class WorkAssignStdin(Base):
     def test_stdin(self):
         target = os.path.join(self.cache, "work_sections.json")
         import devtime.overview as overview
-        stdin = io.TextIOWrapper(io.BytesIO(json.dumps({"abc": "Search", "def": "-"}).encode()), encoding="utf-8")
-        with mock.patch.object(overview, "WORK_SECTIONS", target), \
+        stdin = io.TextIOWrapper(io.BytesIO(json.dumps({"abc": "Search", "def": "-", "theirs": "X"}).encode()),
+                                 encoding="utf-8")
+        store = mock.MagicMock()
+        store.slice.return_value = {"transcripts": [{"id": "abc"}, {"id": "def"}]}  # this org's transcripts
+        with mock.patch.object(cli, "Store", return_value=store), \
+                mock.patch.object(overview, "WORK_SECTIONS", target), \
                 mock.patch.object(overview.assign_work, "__defaults__", (target,)), \
                 mock.patch.object(overview.work_sections, "__defaults__", (target,)), \
                 mock.patch.object(sys, "stdin", stdin):
             out = self.capture(cli.main, ["work-assign", "-"])
             saved = overview.work_sections(target)
-        self.assertEqual(out.strip(), "assigned 2")
+        self.assertEqual(out.strip(), "assigned 2 (skipped 1 not of this organisation)")
         self.assertEqual(saved, {"abc": "Search", "def": "-"})
 
 

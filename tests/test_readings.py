@@ -1,4 +1,5 @@
-"""Readings posted by sessions (POST /api/reading): validation, org resolution, dedupe, stale readings, the queue.
+"""Readings posted by sessions (POST /api/reading): validation, only the instance org's readings kept, dedupe, stale
+readings, the queue.
 
 Temp dirs only (the Fixture of test_orgs); the plan samples file is a temp file.
 
@@ -16,9 +17,10 @@ import urllib.error
 import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import isolate  # noqa: E402,F401  (before devtime: a throw-away home)
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import test_orgs  # noqa: E402
-from devtime import orgs, overview, readings, server  # noqa: E402
+from devtime import overview, readings, server  # noqa: E402
 
 ORG_A, ORG_B = test_orgs.ORG_A, test_orgs.ORG_B
 NOW = time.time()
@@ -71,16 +73,30 @@ class Store(Fixture):
         self.assertIn(0.43, [round(s[2], 2) for s in samples])
         self.assertEqual([s[4] for s in samples if round(s[2], 2) == 0.43], [row["sdReset"]])
 
-    def test_desktop_session_uses_the_desktop_index(self):
-        self.assertEqual(self.store.record_reading(body("sD", 50.0)), "recorded")
-        self.assertEqual(self.rows()[0]["org"], ORG_B)
+    def test_other_orgs_sessions_are_ignored(self):
+        self.assertEqual(self.store.record_reading(body("sB", 50.0)), "ignored")  # tagged B
+        self.assertEqual(self.store.record_reading(body("sD", 50.0)), "ignored")  # B by the desktop index
+        self.assertEqual(self.store.record_reading(dict(body("sA", 50.0), org=ORG_B)), "ignored")  # says it is B
+        self.assertEqual(self.rows(), [])
+        self.assertEqual(self.store.record_reading(dict(body("sA", 50.0), org=ORG_A)), "recorded")
+
+    def test_desktop_session_of_this_org_uses_the_desktop_index(self):
+        self.write_desktop("claude-code-sessions", "acct", ORG_A, "local_8", "sDA")
+        self.assertEqual(self.store.record_reading(body("sDA", 50.0)), "recorded")
+        self.assertEqual(self.rows()[0]["org"], ORG_A)
+
+    def test_no_org_records_nothing(self):
+        from unittest import mock
+        from devtime import paths
+        with mock.patch.object(paths, "ORG", None):
+            self.assertEqual(self.store.record_reading(body("sA", 50.0)), "ignored")
+        self.assertEqual(self.rows(), [])
 
     def test_identical_consecutive_readings_are_stored_once(self):
         self.assertEqual(self.store.record_reading(body("sA", 43.0)), "recorded")
         self.assertEqual(self.store.record_reading(body("sT", 43.0)), "duplicate")  # same org, same figures
         self.assertEqual(self.store.record_reading(body("sA", 44.0)), "recorded")
-        self.assertEqual(self.store.record_reading(body("sB", 43.0)), "recorded")  # another org
-        self.assertEqual([(r["org"], r["sd"]) for r in self.rows()], [(ORG_A, 43.0), (ORG_A, 44.0), (ORG_B, 43.0)])
+        self.assertEqual([(r["org"], r["sd"]) for r in self.rows()], [(ORG_A, 43.0), (ORG_A, 44.0)])
 
     def test_stale_reading_is_dropped_but_a_new_week_is_kept(self):
         self.store.record_reading(body("sA", 60.0))
@@ -101,11 +117,20 @@ class Store(Fixture):
         self.assertEqual([(r["org"], r["sd"]) for r in self.rows()], [(ORG_A, 46.0)])
         self.assertEqual(self.store.readings.pending, {})
 
-    def test_queue_expires_to_unknown(self):
+    def test_queued_session_that_turns_out_another_orgs_is_dropped(self):
+        self.assertEqual(self.store.record_reading(body("sLaterB", 46.0)), "queued")
+        self.write_desktop("claude-code-sessions", "acct", ORG_B, "local_9", "sLaterB")
+        self.store._flush_readings()
+        self.assertEqual(self.rows(), [])
+        self.assertEqual(self.store.readings.pending, {})
+
+    def test_queue_expires_to_nothing(self):
         self.store.record_reading(body("sNever", 47.0))
-        self.assertEqual(self.store.readings.flush(lambda s: None, now=time.time() + 60), 0)
-        self.assertEqual(self.store.readings.flush(lambda s: None, now=time.time() + readings.QUEUE_S + 1), 1)
-        self.assertEqual(self.rows()[0]["org"], orgs.UNKNOWN)
+        flush = lambda now: self.store.readings.flush(lambda s: None, ORG_A, now=now)
+        self.assertEqual(flush(time.time() + 60), 0)
+        self.assertEqual(len(self.store.readings.pending), 1)
+        self.assertEqual(flush(time.time() + readings.QUEUE_S + 1), 0)
+        self.assertEqual((self.rows(), self.store.readings.pending), ([], {}))
 
     def test_session_ids_with_path_characters_are_not_looked_up(self):
         for bad in ("../sA", "a/b", "*", "x\y"):
@@ -136,6 +161,7 @@ class Endpoint(Fixture):
     def test_post_records(self):
         self.assertEqual(post(self.base, body("sA", 48.0)), (200, {"result": "recorded"}))
         self.assertEqual(post(self.base, body("sA", 48.0)), (200, {"result": "duplicate"}))
+        self.assertEqual(post(self.base, body("sB", 49.0)), (200, {"result": "ignored"}))
         self.assertEqual([r["sd"] for r in self.rows()], [48.0])
 
     def test_bad_requests(self):

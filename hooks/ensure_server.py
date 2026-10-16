@@ -1,10 +1,13 @@
 """SessionStart hook: make sure the dashboard server is running.
 
-If nothing answers on the dashboard's port, start `python -m devtime serve --no-open` from the plugin root (this file's
+Each organisation on the PC has its own server (devtime/paths.py): this starts / finds the one of the session's org
+(env CLAUDE_CODE_ORGANIZATION_UUID, else ~/.claude.json's login); if that org can't be determined it starts nothing.
+If nothing of that org answers on its port, start `python -m devtime serve --no-open` from the plugin root (this file's
 parent directory) as a detached, windowless background process (it outlives the session), logging to
-<data dir>/cache/server.log. The port is settings.port (shipped config, then the user's devtime.toml), default 8765,
-unless another data folder's server holds it: only a server whose /api/version `home` is this data folder's counts as
-ours; otherwise the next free port up to port+20 is used and recorded in <data dir>/cache/port.txt (devtime/ports.py).
+<data dir>/orgs/<org>/cache/server.log. The port is settings.port (shipped config, then the user's devtime.toml),
+default 8765, unless another instance's server holds it (another org's, or another data folder's): only a server whose
+/api/version `home` is this instance's counts as ours; otherwise the next free port up to port+20 is used and recorded
+in <data dir>/orgs/<org>/cache/port.txt (devtime/ports.py).
 Also records the plugin root and a launcher in the data dir (paths.install_launcher) so CLAUDE.md text can run
 `python <data dir>/devtime.py ...` without knowing the plugin's install path. Always exits 0 and prints nothing, so it never gets in a session's way. Usage alerts, the plan readings and the usage
 review all need the server.
@@ -38,6 +41,8 @@ def main():
         paths.install_launcher(ROOT)
     except Exception:
         pass
+    if not paths.ORG:
+        return
     number = port()
     if ours(number):
         return
@@ -55,7 +60,8 @@ def main():
     if os.name == "nt":
         flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
     with open(LOG, "a", encoding="utf-8") as log:
-        subprocess.Popen([sys.executable, "-u", "-m", "devtime", "serve", "--no-open", "--port", str(number)], cwd=ROOT, stdout=log,
+        env = dict(os.environ, **{paths.ORG_ENV: paths.ORG})  # the server is this org's whatever else changes
+        subprocess.Popen([sys.executable, "-u", "-m", "devtime", "serve", "--no-open", "--port", str(number)], cwd=ROOT, stdout=log, env=env,
                          stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, creationflags=flags,
                          close_fds=True, start_new_session=os.name != "nt")
 

@@ -1,5 +1,6 @@
 import unittest
 
+import isolate  # noqa: F401  (before devtime: a throw-away home)
 from devtime import overview
 
 H, WEEK = 3600, overview.WEEK

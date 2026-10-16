@@ -8,16 +8,15 @@ the session's organisation and appends a sample to the plan samples file in the 
     - identical consecutive readings of an org are not stored twice;
     - a stale reading (an idle session repeating what it saw earlier: the same weekly window with a lower share, or an
       earlier weekly window) is dropped, so it cannot look like a weekly reset;
-    - a session whose org is not known yet (no transcript scanned) is queued and recorded once it is, or as "unknown"
-      after QUEUE_S.
+    - only readings of the instance's own org are kept (store.Store.record_reading checks the posting session's org);
+      a session whose org is not known yet (no transcript scanned) is queued and recorded once it is known to be
+      ours, and dropped if it is another org's or still unknown after QUEUE_S.
 """
 
 import json
 import os
 import threading
 import time
-
-from . import orgs
 
 QUEUE_S = 900
 QUEUE_MAX = 100
@@ -114,17 +113,17 @@ class Readings:
             self.pending.pop(reading["session"], None)
             return self._store(reading, org)
 
-    def flush(self, org_of, now=None):
-        """Records the queued readings whose session's org is known now (org_of(session) -> org id or None), and
-        those queued longer than QUEUE_S under "unknown". Returns how many were recorded."""
+    def flush(self, org_of, mine, now=None):
+        """Records the queued readings whose session's org is now known to be `mine` (org_of(session) -> org id or
+        None); drops those of another org and those still unknown after QUEUE_S. Returns how many were recorded."""
         now = time.time() if now is None else now
         done = 0
         with self.lock:
             for session, (queued, reading) in list(self.pending.items()):
                 org = org_of(session)
-                if org is None and now - queued >= QUEUE_S:
-                    org = orgs.UNKNOWN
-                if org is not None:
-                    del self.pending[session]
+                if org is None and now - queued < QUEUE_S:
+                    continue
+                del self.pending[session]
+                if mine and org == mine:
                     done += self._store(reading, org) == "recorded"
         return done

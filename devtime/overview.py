@@ -376,9 +376,9 @@ def record_change(label, at=None, path=CHANGES):
 
 def record_plan_sample(five, five_reset, week, week_reset, path=PLAN_SAMPLES, org=None):
     """Append one reading of the plan's usage (percent used and reset times, as the app's get_usage reports them).
-    The reading belongs to `org` (an org id or prefix), else to "unknown": plans differ per organisation."""
+    The reading belongs to `org` (default: this instance's): plans differ per organisation."""
     row = {"t": round(time.time(), 1), "fh": five, "sd": week, "fhReset": iso_ts(five_reset),
-           "sdReset": iso_ts(week_reset), "org": org or orgs.UNKNOWN}
+           "sdReset": iso_ts(week_reset), "org": org or paths.ORG or orgs.UNKNOWN}
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "a", encoding="utf-8") as f:
         f.write(json.dumps(row) + "\n")
@@ -388,7 +388,7 @@ def record_plan_sample(five, five_reset, week, week_reset, path=PLAN_SAMPLES, or
 USAGE_HARVEST = os.path.join(paths.CACHE, "usage_harvest.json")
 CLAUDE_PROJECTS = os.path.join("~", ".claude", "projects")
 HARVEST_DAYS = 9
-HARVEST_VERSION = 2  # 2: per-file org
+HARVEST_VERSION = 3  # 2: per-file org; 3: other orgs' transcripts skipped
 _WEEKLY_ALL = re.compile(r"^Weekly\b.*all models", re.I)
 _harvest_mem = {"cache": None}
 
@@ -500,15 +500,18 @@ def _scan_transcript(path, start=0, pending=(), org=None):
     return readings, sorted(i for i in ids if i), pos, org
 
 
-def harvest_usage(root=None, cache=USAGE_HARVEST, days=HARVEST_DAYS, desktop_orgs=None):
+def harvest_usage(root=None, cache=USAGE_HARVEST, days=HARVEST_DAYS, desktop_orgs=None, allowed=()):
     """Exact plan-usage readings that sessions already made with the get_usage tool, read from the Claude Code
     transcripts (main and subagent) under root, last `days` days: [(time, 5-hour %, weekly %, 5-hour reset,
-    weekly reset, org)], oldest first, one per second and org. The org is the transcript's (orgs.py: its tag, the
-    desktop index `desktop_orgs`, its parent session's, else "unknown"). Only those numbers are kept. Per-file
-    results are cached by (size, mtime); a transcript that only grew is scanned from where the last scan stopped."""
+    weekly reset, org)], oldest first, one per second and org. The org is the transcript's (orgs.py: its tag, its
+    parent session's, the desktop index `desktop_orgs`, else "unknown"); a transcript whose org is not in `allowed`
+    is not read beyond its org tag. Only those numbers are kept. Per-file results are cached by (size, mtime); a
+    transcript that only grew is scanned from where the last scan stopped."""
     root = os.path.expanduser(root or CLAUDE_PROJECTS)
+    desktop_orgs = desktop_orgs or {}
+    allowed = frozenset(allowed or ())
     files = _transcripts(root, time.time() - days * 86400)
-    sig = sorted(files)
+    sig = (sorted(files), allowed, sorted(desktop_orgs.items()))
     mem = _harvest_mem.get("cache")
     if mem and mem["root"] == root and mem["sig"] == sig:
         return _harvest_rows(mem["entries"], desktop_orgs)
@@ -523,21 +526,29 @@ def harvest_usage(root=None, cache=USAGE_HARVEST, days=HARVEST_DAYS, desktop_org
                 entries = data.get("files") or {}
         except (OSError, ValueError, AttributeError):
             pass
+    tags = {}
+    for path, size, mtime in files:
+        old = entries.get(path)
+        tags[path] = orgs.scan_tag(path, (old.get("tagOff", 0), old.get("org")) if old else None)
     fresh, changed = {}, False
     for path, size, mtime in files:
         old = entries.get(path)
-        if old and old.get("size") == size and old.get("mtime") == mtime:
-            fresh[path] = old
+        off, tag = tags[path]
+        if _org_of(path, tag, tags, desktop_orgs) not in allowed:  # another org's: nothing but its tag is read
+            fresh[path] = {"size": size, "mtime": mtime, "tagOff": off, "org": tag, "skip": True, "readings": []}
+            changed |= fresh[path] != old
+            continue
+        if old and not old.get("skip") and old.get("size") == size and old.get("mtime") == mtime:
+            fresh[path] = dict(old, tagOff=off, org=tag)
             continue
         changed = True
-        if old and old.get("size", 0) <= size and old.get("offset", 0) > 0:
-            readings, pending, pos, org = _scan_transcript(path, old["offset"], old.get("pending") or (),
-                                                           old.get("org"))
+        if old and not old.get("skip") and old.get("size", 0) <= size and old.get("offset", 0) > 0:
+            readings, pending, pos, _ = _scan_transcript(path, old["offset"], old.get("pending") or ())
             readings = old.get("readings", []) + readings
         else:
-            readings, pending, pos, org = _scan_transcript(path)
+            readings, pending, pos, _ = _scan_transcript(path)
         fresh[path] = {"size": size, "mtime": mtime, "offset": pos, "pending": pending, "readings": readings,
-                       "org": org}
+                       "tagOff": off, "org": tag}
     if set(fresh) != set(entries):
         changed = True
     if changed:
@@ -553,25 +564,28 @@ def harvest_usage(root=None, cache=USAGE_HARVEST, days=HARVEST_DAYS, desktop_org
     return _harvest_rows(fresh, desktop_orgs)
 
 
+def _org_of(path, tag, tags, desktop_orgs):
+    """A harvested transcript's org: its tag, else (a subagent) its parent session's, else the desktop index's."""
+    if tag:
+        return tag
+    folder, name = os.path.split(path)
+    if os.path.basename(folder) == "subagents":  # <project>/<session>/subagents/agent-x.jsonl
+        session_dir = os.path.dirname(folder)
+        session = os.path.basename(session_dir)
+        parent = os.path.join(os.path.dirname(session_dir), session + ".jsonl")
+        parent_tag = (tags.get(parent) or orgs.scan_tag(parent))[1]
+        return orgs.resolve(None, session, desktop_orgs, parent_tag)
+    return orgs.resolve(None, os.path.splitext(name)[0], desktop_orgs)
+
+
 def _harvest_rows(entries, desktop_orgs):
     """The readings of all scanned transcripts, each with its transcript's org."""
-    desktop_orgs = desktop_orgs or {}
-    tags = {path: e.get("org") for path, e in entries.items()}
+    tags = {path: (e.get("tagOff", 0), e.get("org")) for path, e in entries.items()}
     seen, out = set(), []
     for path, e in entries.items():
-        if not e["readings"]:
+        if not e.get("readings"):
             continue
-        org = tags.get(path)
-        if not org:
-            folder, name = os.path.split(path)
-            if os.path.basename(folder) == "subagents":  # <project>/<session>/subagents/agent-x.jsonl
-                session_dir = os.path.dirname(folder)
-                session = os.path.basename(session_dir)
-                parent = os.path.join(os.path.dirname(session_dir), session + ".jsonl")
-                parent_org = tags.get(parent) or orgs.read_tag(parent)
-            else:
-                session, parent_org = os.path.splitext(name)[0], None
-            org = orgs.resolve(None, session, desktop_orgs, parent_org)
+        org = _org_of(path, e.get("org"), tags, desktop_orgs)
         for r in e["readings"]:
             if (round(r[0]), org) not in seen:
                 seen.add((round(r[0]), org))
@@ -585,41 +599,44 @@ def same_org(sample_org, org):
     return orgs.matches(org, sample_org or orgs.UNKNOWN)
 
 
-def plan_samples(settings, org=None, path=PLAN_SAMPLES):
-    """Readings of the plan's usage, oldest first: [(time, 5-hour share, weekly share, 5-hour reset, weekly reset,
-    org)]. With `org` (a full org id) only that org's readings: each org has its own plan. Readings recorded by hand
-    without an org, and the app's history entries without one, belong to "unknown". Without `org`, all readings
-    (of the app's history: those of its latest org).
-    From the desktop app's plan-usage history (only percentages, sampled while the app polls), from readings
-    sessions recorded with `devtime plan-sample` / the status line (exact, with reset times) and from get_usage
-    calls found in the Claude Code transcripts (exact, numbers only). Missing sources are skipped."""
+def plan_samples(settings, org, path=PLAN_SAMPLES, single_org=False):
+    """Readings of the plan's usage of the org `org` (this instance's), oldest first: [(time, 5-hour share, weekly
+    share, 5-hour reset, weekly reset, org)]. Each org has its own plan, so only that org's readings count:
+    - the desktop app's plan-usage history (only percentages, sampled while the app polls): entries tagged with the
+      org; entries without an org only when `single_org` (every org known on this machine is this one);
+    - readings sessions posted (the session.measure hook) or recorded with `devtime plan-sample` (exact, with reset
+      times), stored with their org; rows of "unknown" never count;
+    - get_usage calls found in the org's own Claude Code transcripts (exact, numbers only).
+    Missing sources are skipped. No org: no readings."""
+    if not org:
+        return []
     out = []
     try:
         with open(os.path.expanduser(str(settings.get("plan_usage_history") or "")), encoding="utf-8") as f:
             raw = json.load(f).get("samples") or []
-        last = raw[-1].get("org") if raw else None
         for s in raw:
             u = s.get("u") or {}
-            who = s.get("org") or orgs.UNKNOWN
-            if (s.get("org") == last if org is None else same_org(who, org)) and isinstance(u.get("sd"), (int, float)):
-                out.append((s["t"] / 1000, (u.get("fh") or 0) / 100, u["sd"] / 100, None, None, who))
-    except (OSError, ValueError, AttributeError):
+            who = s.get("org")
+            if (who == org or (not who and single_org)) and isinstance(u.get("sd"), (int, float)):
+                out.append((s["t"] / 1000, (u.get("fh") or 0) / 100, u["sd"] / 100, None, None, org))
+    except (OSError, ValueError, AttributeError, TypeError):
         pass
     try:
         with open(path, encoding="utf-8") as f:
             for line in f:
                 try:
                     s = json.loads(line)
-                    who = s.get("org") or orgs.UNKNOWN
-                    if org is None or same_org(who, org):
-                        out.append((s["t"], s["fh"] / 100, s["sd"] / 100, s.get("fhReset"), s.get("sdReset"), who))
-                except (ValueError, KeyError, TypeError):
+                    if same_org(s.get("org"), org):
+                        out.append((s["t"], s["fh"] / 100, s["sd"] / 100, s.get("fhReset"), s.get("sdReset"), org))
+                except (ValueError, KeyError, TypeError, AttributeError):
                     continue
     except OSError:
         pass
     have = sorted(r[0] for r in out)
-    for t, fh, sd, fh_reset, sd_reset, who in harvest_usage(desktop_orgs=orgs.desktop_index(settings)):
-        if org is not None and who != org:
+    allowed = {org} | ({orgs.UNKNOWN} if settings.get("include_unknown_org") else set())
+    for t, fh, sd, fh_reset, sd_reset, who in harvest_usage(desktop_orgs=orgs.desktop_index(settings),
+                                                             allowed=allowed):
+        if who not in allowed:
             continue
         i = bisect.bisect_left(have, t - 5)
         if i < len(have) and have[i] <= t + 5:
@@ -798,7 +815,7 @@ def guess_reset(samples):
     return max((b for _, b in spans), key=score)
 
 
-def limits(data, idx, settings, now, samples=None, org=None):
+def limits(data, idx, settings, now, samples=None):
     """Plan-limit view for the whole account: weekly usage as a share of the weekly allowance, the plan's own samples,
     the 5-hour session windows, and where the week ends at the pace since the weekly reset and since the session one.
 
@@ -811,7 +828,8 @@ def limits(data, idx, settings, now, samples=None, org=None):
     configured = float(settings.get("weekly_budget_usd") or 0)
     budget = configured
     anchor = settings.get("weekly_reset")
-    samples = plan_samples(settings, org) if samples is None else samples
+    if samples is None:
+        samples = plan_samples(settings, data.get("org"), single_org=bool(data.get("singleOrg")))
     exact = [s for s in samples if s[4]]
     guessed = None
     if not anchor and not exact:  # no reset instant configured and none reported by the plan: take the app history's
@@ -1099,10 +1117,10 @@ def watch(data, idx, alerts, now, hours=3):
             "monitoring": monitoring_brief, "experiments": experiments(data, idx, now)}
 
 
-def tick_summary(data, settings, alerts, now, org=None):
+def tick_summary(data, settings, alerts, now):
     """What a periodic dashboard pass needs: the latest plan-usage reading ({weekly, fiveHour (percent), ageMin} or
     None), the number of unlabelled work items and of active alerts."""
-    samples = plan_samples(settings, org)
+    samples = plan_samples(settings, data.get("org"), single_org=bool(data.get("singleOrg")))
     reading = None
     if samples:
         t, fh, sd = samples[-1][:3]

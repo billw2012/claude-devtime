@@ -1,9 +1,11 @@
-"""Which port this data folder's dashboard server uses (stdlib only; imported by the hooks).
+"""Which port this org instance's dashboard server uses (stdlib only; imported by the hooks).
 
-Two OS users on one PC (or two data folders) must never see each other's dashboard, so a server only counts as ours if
-its /api/version `home` matches paths.home_id() (a hash of the data directory). settings.port (default 8765) is kept
-when it is ours or free; if someone else's server holds it, the next free port of port+1..port+20 is used. The choice
-is recorded in <data dir>/cache/port.txt, which every URL builder reads through choose() (setup, tick, hooks, server).
+Each organisation on the PC has its own instance (paths.py) and server, and two OS users (or two data folders) must
+never see each other's dashboard either, so a server only counts as ours if its /api/version `home` matches
+paths.home_id() (a hash of the instance folder). settings.port (default 8765) is kept when it is ours or free; if
+someone else's server holds it, the next free port of port+1..port+20 is used. The choice is recorded in the
+instance's cache/port.txt, which every URL builder reads through choose() (setup, tick, hooks, server) and the hooks
+module reads to post readings.
 """
 
 import json

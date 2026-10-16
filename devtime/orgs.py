@@ -1,7 +1,8 @@
 """Which organisation a transcript belongs to (one account can be signed into several in the Claude desktop app).
 
-All organisations write to the same ~/.claude/projects, so DevTime separates them itself. A transcript's org comes from,
-in this order:
+All organisations write to the same ~/.claude/projects, so DevTime separates them itself: each org's instance
+(paths.py) only reads the transcripts of its own org; of the others it reads no more than the org tag. A transcript's
+org comes from, in this order:
 
 1. its own `credential_org` record: {"type": "attachment", "attachment": {"type": "credential_org",
    "organizationUuid": "<uuid>"}} (written by newer Claude Code versions, often several times per transcript);
@@ -11,7 +12,7 @@ in this order:
 4. "unknown".
 
 The desktop dir is settings.desktop_dir / env DEVTIME_DESKTOP_DIR, else the app's folder for the OS. Only ids and org
-folder names are read from those files.
+folder names are read from those files. Which org the current process runs in is paths.current_org(), not this.
 """
 
 import glob
@@ -21,13 +22,6 @@ import sys
 
 UNKNOWN = "unknown"
 _file_cache = {}  # path -> ((mtime, size), session id or None)
-
-
-class OrgError(Exception):
-    def __init__(self, status, message):
-        super().__init__(message)
-        self.status = status
-        self.message = message
 
 
 def desktop_base(settings=None):
@@ -115,20 +109,49 @@ def matches(org, spec):
                                            and org.startswith(spec)))
 
 
-def pick(known, spec, default, allow_all):
-    """Resolves the `org` of a request against the org ids present in the data. Returns the full id, or None for all
-    orgs (only when allowed). Raises OrgError (403 all-orgs refused, 404 no such org, 400 ambiguous)."""
-    if not spec:
-        return default
-    if spec == "all":
-        if not allow_all:
-            raise OrgError(403, "viewing all organisations is off; set allow_all_orgs = true in devtime.toml")
-        return None
-    if spec in known:
-        return spec
-    hits = sorted(o for o in known if matches(o, spec))
-    if len(hits) == 1:
-        return hits[0]
-    if not hits:
-        raise OrgError(404, "no organisation matches '%s'" % spec)
-    raise OrgError(400, "'%s' matches several organisations; use more characters" % spec)
+def scan_tag(path, prev=None):
+    """(offset, tag): the first org tag of a transcript, read incrementally. `prev` is the (offset, tag) of an earlier
+    call: a tag once found is kept; otherwise only the bytes past the offset are searched. Only lines that contain
+    "credential_org" are parsed; nothing else of the file is kept."""
+    offset, tag = prev or (0, None)
+    try:
+        if os.path.getsize(path) < offset:  # rewritten: start over
+            offset, tag = 0, None
+    except OSError:
+        return offset, tag
+    if tag:
+        return offset, tag
+    try:
+        with open(path, "rb") as f:
+            f.seek(offset)
+            for raw in f:
+                if not raw.endswith(b"\n"):
+                    break  # a line still being written
+                offset += len(raw)
+                if b"credential_org" in raw:
+                    try:
+                        tag = tag_of(json.loads(raw))
+                    except ValueError:
+                        tag = None
+                    if tag:
+                        break
+    except OSError:
+        pass
+    return offset, tag
+
+
+def classify(discovered, tags, index):
+    """{path: org} for discovered transcripts (scan.discover entries). tags: {path: (offset, tag)}, updated in place
+    (scan_tag); index: desktop_index(). A main session: its tag, else the desktop index, else "unknown"; a subagent /
+    workflow agent: its own tag, else its main session's org."""
+    for d in discovered:
+        tags[d["path"]] = scan_tag(d["path"], tags.get(d["path"]))
+    out, mains = {}, {}
+    for d in discovered:
+        if d["role"] == "main":
+            out[d["path"]] = mains[(d["folder"], d["session"])] = resolve(tags[d["path"]][1], d["session"], index)
+    for d in discovered:
+        if d["role"] != "main":
+            parent = mains.get((d["folder"], d["session"])) or resolve(None, d["session"], index)
+            out[d["path"]] = tags[d["path"]][1] or parent
+    return out

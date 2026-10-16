@@ -1,7 +1,13 @@
-"""Local dashboard server: http://127.0.0.1:8765 (stdlib only, binds to localhost by default).
+"""Local dashboard server of one org's instance: http://127.0.0.1:8765 (stdlib only, binds to localhost by default).
 
-A background thread rescans the transcripts every poll_s seconds; the page polls /api/version and refetches its data
+Each org on the PC has its own server (its own port, paths.py / ports.py) serving only that org's transcripts. A
+background thread rescans the transcripts every poll_s seconds; the page polls /api/version and refetches its data
 when the version moves.
+
+A caller that says who it is is checked: `org=<uuid>` must be this instance's org and `session=<cli session id>` must
+be one of its sessions (its transcript's org tag or the desktop index; an unknown session is refused). The hooks
+module's panel passes both, so a session of another org gets nothing. /api/version answers everyone (it carries the
+instance's `home` and `org`, which is how a session finds its own org's server).
 """
 
 import gzip
@@ -14,7 +20,7 @@ import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
-from . import orgs, paths, ports
+from . import paths, ports
 
 STATIC = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "static")
 
@@ -25,16 +31,16 @@ def make_handler(store):
     indexes = {}  # (version, project) -> overview.Index
     overviews = {}  # (version, project, range) -> (time, result)
 
-    def overview_for(project, range_key, org):
+    def overview_for(project, range_key):
         from . import overview
         # Both slices and every index must come from one build: a rebuild between reads would pair one build's
         # index with the next one's data.
         for _ in range(5):
-            data, full = store.slice(project, org), store.slice("*", org)
+            data, full = store.slice(project), store.slice("*")
             if data.get("version") == full.get("version"):
                 break
         version = full.get("version")
-        key = (version, project, range_key, org)
+        key = (version, project, range_key)
         with lock:
             hit = overviews.get(key)
         if hit and time.time() - hit[0] < 15:
@@ -42,17 +48,17 @@ def make_handler(store):
 
         def index(p):
             with lock:
-                found = indexes.get((version, org, p))
+                found = indexes.get((version, p))
             if found is None:
                 found = overview.Index(full if p == "*" else data)
                 with lock:
                     for old in [k for k in indexes if k[0] != version]:
                         del indexes[old]
-                    indexes[(version, org, p)] = found
+                    indexes[(version, p)] = found
             return found
         now = time.time()
         week = overview.period(full, index("*"), now - 7 * 86400, now)["cost"]
-        plan = overview.limits(full, index("*"), store.config.settings, now, org=org)
+        plan = overview.limits(full, index("*"), store.config.settings, now)
         result = overview.overview(data, index(project), range_key, store.config.settings, week, now, plan)
         with lock:
             for old in [k for k in overviews if k[0] != version]:
@@ -82,11 +88,19 @@ def make_handler(store):
                 self.send(200, body, "application/json")
 
         def do_GET(self):
-            try:
-                self.route()
-            except orgs.OrgError as error:
-                body = json.dumps({"error": error.message}).encode()
-                self.send(error.status, body, "application/json")
+            self.route()
+
+        def refused(self, query):
+            """The reason this caller may not see the instance's data, or None."""
+            if not paths.ORG:
+                return paths.NO_ORG_TEXT
+            claimed = (query.get("org") or [""])[0]
+            session = (query.get("session") or [""])[0]
+            if claimed and claimed != paths.ORG:
+                return "this devtime server is another organisation's"
+            if session and not store.is_ours(session):
+                return "this devtime server is another organisation's (or the session's organisation is not known yet)"
+            return None
 
         def do_POST(self):
             url = urlparse(self.path)
@@ -113,49 +127,32 @@ def make_handler(store):
         def route(self):
             url = urlparse(self.path)
             query = parse_qs(url.query)
-            org_spec = (query.get("org") or [""])[0]
             if url.path == "/api/version":
                 data = store.data or {}
                 return self.json({"version": store.version, "generated": data.get("generated"),
-                                  "lastScan": store.last_scan, "home": paths.home_id()})
-            if url.path == "/api/orgs":
-                return self.json([{k: e[k] for k in ("id", "name", "sessions", "last")} for e in store.org_list()])
+                                  "lastScan": store.last_scan, "home": paths.home_id(), "org": paths.ORG,
+                                  "orgName": paths.org_name(paths.ORG) if paths.ORG else None})
+            if url.path.startswith("/api/"):
+                why = self.refused(query)
+                if why:
+                    return self.send(403, json.dumps({"error": why}).encode(), "application/json")
             if url.path == "/api/projects":
-                org = store.resolve_org(org_spec)
-                data = store.slice("*", org) if store.data else {}
+                data = store.slice("*") if store.data else {}
                 return self.json({"version": store.version, "projects": data.get("projects", []),
-                                  "defaultProject": data.get("defaultProject"),
-                                  "org": org[:8] if org else "all"})
+                                  "defaultProject": data.get("defaultProject")})
             if url.path == "/api/overview":
-                return self.json(overview_for((query.get("project") or ["*"])[0], (query.get("range") or ["24h"])[0],
-                                              store.resolve_org(org_spec)))
+                return self.json(overview_for((query.get("project") or ["*"])[0], (query.get("range") or ["24h"])[0]))
             if url.path == "/api/alerts":
-                return self.json({"alerts": store.alerts.list(store.resolve_org(org_spec))})
+                return self.json({"alerts": store.alerts.list()})
             if url.path == "/api/watch":
                 from . import overview
-                org = store.resolve_org(org_spec)
-                data = store.slice("*", org)
+                data = store.slice("*")
                 hours = float((query.get("hours") or ["3"])[0])
-                return self.json(overview.watch(data, overview.Index(data), store.alerts.list(org), time.time(), hours))
+                return self.json(overview.watch(data, overview.Index(data), store.alerts.list(), time.time(), hours))
             if url.path == "/api/tick":
                 from . import overview
-                session = (query.get("session") or [""])[0]
-                note = None
-                if org_spec:
-                    org = store.resolve_org(org_spec)
-                else:
-                    found = store.org_of_session(session) if session else None
-                    if session and found is None:
-                        store.refresh()  # a session that started since the last scan
-                        found = store.org_of_session(session)
-                    org = found or store.default_org()
-                    if not found:
-                        note = "session id %s; the most recent org is used" % ("not found" if session else "not given")
-                out = overview.tick_summary(store.slice("*", org), store.config.settings, store.alerts.list(org),
-                                            time.time(), org)
-                out["org"] = org if org else "all"
-                if note:
-                    out["orgNote"] = note
+                out = overview.tick_summary(store.slice("*"), store.config.settings, store.alerts.list(), time.time())
+                out["org"] = paths.ORG
                 return self.json(out)
             if url.path == "/api/findings":
                 from . import findings
@@ -165,12 +162,11 @@ def make_handler(store):
                                                    (query.get("script") or [None])[0], since, 50))
             if url.path == "/api/data":
                 project = (query.get("project") or ["*"])[0]
-                org = store.resolve_org(org_spec)
-                key = (store.version, project, org)
+                key = (store.version, project)
                 with lock:
                     body = encoded.get(key)
                 if body is None:
-                    data = store.slice(project, org)
+                    data = store.slice(project)
                     body = gzip.compress(json.dumps(data, separators=(",", ":")).encode(), 5)
                     with lock:
                         for old in [k for k in encoded if k[0] != store.version]:
@@ -194,11 +190,13 @@ def make_handler(store):
 
 
 def serve(store, host=None, port=None, open_browser=True):
+    if not paths.ORG:
+        raise SystemExit("devtime: " + paths.NO_ORG_TEXT)
     s = store.config.settings
     host = host or s.get("host", "127.0.0.1")
     port = port or ports.choose(store.config.root)  # the configured port, or the next free one if it is not ours
     poll = float(s.get("poll_s", 10))
-    store.log("first scan of", s.get("projects_dir"))
+    store.log("org %s (%s): first scan of" % (paths.org_name(paths.ORG), paths.ORG), s.get("projects_dir"))
     store.refresh()
 
     def loop():

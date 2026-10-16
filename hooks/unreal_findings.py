@@ -9,7 +9,7 @@ Add it yourself to ~/.claude/settings.json (user-wide; it only acts in projects 
 
 Silent unless a run of this session's project finished since the session's previous report and something in it was
 flagged (throttled to ~3 fps, repeated fixed-length waits, Python blocking the editor, checks failing at their timeout,
-slow startup). Reads only the Unreal logs through the dashboard's cache (<data dir>/cache/unreal.pickle); never fails the call.
+slow startup). Reads only the Unreal logs through the session's org's dashboard cache (<data dir>/orgs/<org>/cache/unreal.pickle); never fails the call.
 """
 
 import json
@@ -62,6 +62,10 @@ def main():
     except Exception:
         return
     if data.get("tool_name") not in ("Bash", "PowerShell"):
+        return
+    sys.path.insert(0, ROOT)
+    from devtime import paths
+    if not paths.ORG:  # the session's org is unknown: nothing of any org's instance
         return
     inp = data.get("tool_input") or {}
     if inp.get("run_in_background"):

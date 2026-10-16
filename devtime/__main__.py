@@ -6,16 +6,16 @@
     python -m devtime projects                           list projects found and their totals
     python -m devtime findings [--project MyProject] [--script my_script.py] [--since 1d] [--latest] [--json]
                                                          what wastes time in Unreal runs, and what to change
-    python -m devtime plan-sample [--org ORG] --five 14 --five-reset 2026-10-11T16:10Z --week 74 --week-reset 2026-10-16T00:00Z
+    python -m devtime plan-sample --five 14 --five-reset 2026-10-11T16:10Z --week 74 --week-reset 2026-10-16T00:00Z
                                                          record the plan's usage as the app reports it (a session
                                                          reads it with get_usage); the weekly-limit chart is
-                                                         pinned to these readings (of that org; "unknown" without --org)
+                                                         pinned to these readings (of the current org)
     python -m devtime mark "Runner agent on Haiku" [--at 2026-10-11T10:26Z]
                                                          mark a change on the weekly-limit chart (<data dir>/config/changes.toml)
-    python -m devtime review-note [--org ORG] --session "Main session" --text "..."
+    python -m devtime review-note --session "Main session" --text "..."
                                                          a usage reviewer's note for a main session (by title);
                                                          delivered to it like a usage alert
-    python -m devtime work-items [--org ORG] [--days 8] [--max 250]  unlabelled pieces of work and the existing section names
+    python -m devtime work-items [--days 8] [--max 250]  unlabelled pieces of work and the existing section names
                                                          (JSON), for the scheduled section labeller
     python -m devtime setup check | claude-md --cap N [--dry-run] | open
                                                          what /devtime:start does mechanically (devtime/setup.py)
@@ -25,12 +25,16 @@
                                                          restores prior settings.json values from the install ledger
     python -m devtime ab new ID --title T --arm name[:model[:agent_type]] ... | arm ID STAGE | report ID | stop ID | list
                                                          what /devtime:ab does (devtime/ab.py)
-    python -m devtime work-assign [--org ORG] FILE|-    merge {"<id>": "<section or ->"} (file, or - for stdin) into
+    python -m devtime work-assign FILE|-                merge {"<id>": "<section or ->"} (file, or - for stdin) into
                                                          <data dir>/cache/work_sections.json
-    python -m devtime tick [--session ID] [--org ORG]   start the server if needed; compact JSON for one loop pass,
-                                                         scoped to the organisation of session ID
-    python -m devtime review-context [--hours 2] [--org ORG]  summary + review log tail for the usage reviewer (devtime/tick.py)
+    python -m devtime tick                               start the server if needed; compact JSON for one loop pass
+    python -m devtime review-context [--hours 2]         summary + review log tail for the usage reviewer (devtime/tick.py)
     python -m devtime review-done --text "..."          record a finished review
+    python -m devtime org                                the current organisation, its instance folder and port
+
+Each organisation on the PC has its own devtime (devtime/paths.py): every command works on the instance of the org it
+runs in (env CLAUDE_CODE_ORGANIZATION_UUID, else ~/.claude.json's login). If that org can't be determined, commands
+that use devtime's data print {"refused": true, ...} and exit 2.
 """
 
 import argparse
@@ -39,19 +43,28 @@ import json
 import sys
 import time
 
-from .orgs import OrgError
+from . import paths
 from .store import Store
 
-
-def add_org(parser, text="organisation (id or short prefix; default: the most recently active)"):
-    parser.add_argument("--org", help=text)
+NO_ORG_OK = {"org", "mark", "setup:claude-md", "ab:new", "ab:arm", "ab:stop", "ab:list", "optimize:list",
+             "optimize:apply", "optimize:remove", "optimize:adopt", None}
 
 
 def main(argv=None):
-    try:
-        return run(argv)
-    except OrgError as error:
-        sys.exit("devtime: " + error.message)
+    return run(argv)
+
+
+def org_cmd():
+    from . import ports
+    out = {"org": paths.ORG, "source": paths.ORG_SOURCE, "name": paths.org_name(paths.ORG) if paths.ORG else None,
+           "instance": paths.INSTANCE if paths.ORG else None, "dataDir": paths.DATA}
+    if paths.ORG:
+        number = ports.recorded()
+        out.update(port=number, serverAnswering=bool(number and ports.ours(number)),
+                   url="http://%s:%d/" % (ports.HOST, number) if number else None)
+    else:
+        out["error"] = paths.NO_ORG_TEXT
+    print(json.dumps(out, separators=(",", ":")))
 
 
 def run(argv=None):
@@ -66,13 +79,10 @@ def run(argv=None):
     p.add_argument("--project")
     p.add_argument("--since", help="ISO date/time (UTC)")
     p.add_argument("--top", type=int, default=15)
-    add_org(p)
     p = sub.add_parser("json")
     p.add_argument("out")
     p.add_argument("--project")
-    add_org(p)
     p = sub.add_parser("projects")
-    add_org(p)
     p = sub.add_parser("findings")
     p.add_argument("--project")
     p.add_argument("--script", help="e.g. my_script.py")
@@ -85,27 +95,21 @@ def run(argv=None):
     p.add_argument("--five-reset", help="when the 5-hour window resets (ISO 8601)")
     p.add_argument("--week", type=float, required=True, help="weekly limit (all models), percent used")
     p.add_argument("--week-reset", help="when the weekly limit resets (ISO 8601)")
-    add_org(p, "the organisation whose plan this reading is of (default: unknown)")
     p = sub.add_parser("mark")
     p.add_argument("label")
     p.add_argument("--at", help="ISO 8601 (default: now)")
     p = sub.add_parser("review-note")
     p.add_argument("--session", required=True, help="the main session's title, as /api/watch shows it")
     p.add_argument("--text", required=True)
-    add_org(p)
     p = sub.add_parser("work-items")
     p.add_argument("--days", type=float, default=8)
     p.add_argument("--max", type=int, default=250)
-    add_org(p)
     p = sub.add_parser("work-assign")
     p.add_argument("file", help='JSON {"<transcript id>": "<section name or ->", ...}; - reads stdin')
-    add_org(p, "only assign transcripts of this organisation")
     p = sub.add_parser("tick")
-    p.add_argument("--session", nargs="?", const="", help="the calling session's CLI session id: everything is scoped to its organisation")
-    add_org(p)
+    sub.add_parser("org")
     p = sub.add_parser("review-context")
     p.add_argument("--hours", type=float, default=2)
-    add_org(p)
     p = sub.add_parser("review-done")
     p.add_argument("--text", required=True, help="one line: the notes left, or nothing to raise")
     p = sub.add_parser("setup")
@@ -151,6 +155,15 @@ def run(argv=None):
     q.add_argument("id")
     asub.add_parser("list")
     args = parser.parse_args(argv)
+    key = args.cmd
+    for sub_key in ("setup_cmd", "ab_cmd", "opt_cmd"):
+        if getattr(args, sub_key, None):
+            key = "%s:%s" % (args.cmd, getattr(args, sub_key))
+    if args.cmd == "org":
+        return org_cmd()
+    if not paths.ORG and key not in NO_ORG_OK:
+        print(json.dumps({"refused": True, "error": paths.NO_ORG_TEXT}, separators=(",", ":")))
+        return 2
     if args.cmd == "ab":
         from . import ab
         return ab.main(args)
@@ -167,22 +180,19 @@ def run(argv=None):
         else:
             with open(args.file, encoding="utf-8") as handle:
                 mapping = json.load(handle)
-        skipped = 0
-        if args.org:  # keep to the org's own transcripts: another org's work is not ours to label
-            store = Store(verbose=False)
-            store.refresh()
-            org = store.resolve_org(args.org)
-            mine = {t["id"] for t in store.slice("*", org)["transcripts"]}
-            skipped = sum(1 for k in mapping if k not in mine)
-            mapping = {k: v for k, v in mapping.items() if k in mine}
-        print(f"assigned {assign_work(mapping)}" + (f" (skipped {skipped} of other organisations)" if skipped else ""))
+        store = Store(verbose=False)  # keep to this org's own transcripts: another org's work is not ours to label
+        store.refresh()
+        mine = {t["id"] for t in store.slice("*")["transcripts"]}
+        skipped = sum(1 for k in mapping if k not in mine)
+        mapping = {k: v for k, v in mapping.items() if k in mine}
+        print(f"assigned {assign_work(mapping)}" + (f" (skipped {skipped} not of this organisation)" if skipped else ""))
         return
     if args.cmd in ("tick", "review-context", "review-done"):
         from . import tick
         if args.cmd == "tick":
-            return tick.tick(args.session, args.org)
+            return tick.tick()
         if args.cmd == "review-context":
-            return tick.review_context(args.hours, args.org)
+            return tick.review_context(args.hours)
         return tick.review_done(args.text)
     if args.cmd == "mark":
         from .overview import record_change
@@ -190,39 +200,39 @@ def run(argv=None):
         return
     if args.cmd == "review-note":
         from .alerts import record_note
-        print(record_note(args.session, args.text, org=args.org))
+        print(record_note(args.session, args.text))
         return
     if args.cmd == "plan-sample":
         from .overview import record_plan_sample
-        print(record_plan_sample(args.five, args.five_reset, args.week, args.week_reset, org=args.org))
+        print(record_plan_sample(args.five, args.five_reset, args.week, args.week_reset))
         return
     if args.cmd == "findings":
         return findings_cmd(args)
 
-    store = Store(verbose=args.cmd == "serve")
     if args.cmd == "serve":
+        from . import migrate
+        migrate.run()
         from .server import serve
-        serve(store, args.host, args.port, not args.no_open)
+        serve(Store(verbose=True), args.host, args.port, not args.no_open)
         return
+    store = Store(verbose=False)
     store.refresh()
-    org = store.resolve_org(getattr(args, "org", None))  # one organisation at a time
     if args.cmd == "report":
-        project = args.project or store.slice("*", org).get("defaultProject")
+        project = args.project or store.slice("*").get("defaultProject")
         since = None
         if args.since:
             text = args.since + ("T00:00:00+00:00" if len(args.since) == 10 else "")
             since = datetime.datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp()
         from .report import report
-        report(store.slice(project, org), args.top, since)
+        report(store.slice(project), args.top, since)
     elif args.cmd == "json":
         with open(args.out, "w", encoding="utf-8") as handle:
-            json.dump(store.slice(args.project, org), handle)
+            json.dump(store.slice(args.project), handle)
     elif args.cmd == "work-items":
         from .overview import work_items
-        print(json.dumps(dict(work_items(store.slice("*", org), time.time(), args.days, args.max),
-                              org=org if org else "all"), separators=(",", ":")))
+        print(json.dumps(work_items(store.slice("*"), time.time(), args.days, args.max), separators=(",", ":")))
     elif args.cmd == "projects":
-        for p in store.slice("*", org).get("projects", []):
+        for p in store.slice("*").get("projects", []):
             last = datetime.datetime.fromtimestamp(p["last"]).strftime("%Y-%m-%d %H:%M")
             print(f"  {p['name'][:40]:40s} {p['sessions']:4d} sessions {p['subagents']:5d} subagents "
                   f"busy {p['busy'] / 3600:7.1f} h  ${p['cost']:9.2f}  last {last}")

@@ -1,14 +1,12 @@
 """The mechanical half of one /devtime:start pass, kept small so a loop in a session costs almost no context.
 
-    python -m devtime tick [--session ID] [--org ORG]
-                                                  make sure the server is up (no browser), print compact JSON:
-        {"url", "org", "reading": {weekly, fiveHour, ageMin} | null, "labels": unlabelled work items,
+    python -m devtime tick                       make sure this org's server is up (no browser), print compact JSON:
+        {"url", "org": {id, name}, "reading": {weekly, fiveHour, ageMin} | null, "labels": unlabelled work items,
          "review": {"due", "lastAt"}, "alerts": active alerts, "cap": CLAUDE.md cap | null, "setup": block exists}
-        Everything is scoped to one organisation: the one of the session --session (its CLI session id), else --org,
-        else the most recently active ("orgNote" says when the session was not found / not given).
-    python -m devtime review-context [--hours 2] [--org ORG]
-                                                  everything the reviewer needs in one call: the /api/watch summary
-                                                  of that org and the last 40 lines of review-log.md
+        Everything is the current org's instance (paths.py). If the org can't be determined it prints
+        {"refused": true, "error": ...} and exits 2 without doing anything.
+    python -m devtime review-context [--hours 2]  everything the reviewer needs in one call: the /api/watch summary
+                                                  and the last lines of review-log.md
     python -m devtime review-done --text "..."    append a line to review-log.md, stamp review_state.json
 
 The numbers come from the running server (/api/tick, /api/watch); if it does not answer they are computed locally.
@@ -19,11 +17,10 @@ import datetime
 import json
 import os
 import time
-import urllib.error
 import urllib.parse
 import urllib.request
 
-from . import orgs, paths, setup
+from . import paths, setup
 
 REVIEW_EVERY_S = 2 * 3600
 LOG_TAIL = 12
@@ -60,77 +57,62 @@ def local_store():
     return store
 
 
-def org_error(error):
-    """The server refused the org (unknown, ambiguous, all not allowed): as an orgs.OrgError with its message."""
-    try:
-        message = json.loads(error.read().decode("utf-8")).get("error") or str(error)
-    except Exception:
-        message = str(error)
-    return orgs.OrgError(error.code, message)
-
-
 def query(**params):
     """"?a=b&..." of the parameters that are set."""
     params = {k: v for k, v in params.items() if v not in (None, "")}
     return "?" + urllib.parse.urlencode(params) if params else ""
 
 
-def tick_numbers(url, up, now, session=None, org=None):
+def tick_numbers(url, up, now):
     if up:
         try:
-            return server_json(url, "/api/tick" + query(session=session, org=org))
-        except urllib.error.HTTPError as error:
-            if error.code in (400, 403, 404):
-                raise org_error(error)
+            out = server_json(url, "/api/tick" + query(org=paths.ORG))
+            if out.get("org") == paths.ORG:  # our own org's server (the port came from this instance's port.txt)
+                return out
         except Exception:
-            pass  # an older server without the endpoint
+            pass  # an older server without the endpoint, or one that refused
     from . import overview
     store = local_store()
-    note = None
-    if org:
-        scope = store.resolve_org(org)
-    else:
-        scope = store.org_of_session(session) if session else None
-        if not scope:
-            scope = store.default_org()
-            note = "session id %s; the most recent org is used" % ("not found" if session else "not given")
-    out = overview.tick_summary(store.slice("*", scope), store.config.settings, store.alerts.list(scope), now, scope)
-    out["org"] = scope if scope else "all"
-    if note:
-        out["orgNote"] = note
-    return out
+    return overview.tick_summary(store.slice("*"), store.config.settings, store.alerts.list(), now)
 
 
-def tick(session=None, org=None):
+def refuse_without_org():
+    """Prints the refusal and returns 2 if the current org is unknown, else None."""
+    if paths.ORG:
+        return None
+    print(json.dumps({"refused": True, "error": paths.NO_ORG_TEXT}, separators=(",", ":")))
+    return 2
+
+
+def tick():
+    refused = refuse_without_org()
+    if refused:
+        return refused
+    from . import migrate
+    migrate.run()
     now = time.time()
     url, up = setup.ensure_server()
-    out = {"url": url}
-    numbers = tick_numbers(url, up, now, session, org)
+    out = {"url": url, "org": {"id": paths.ORG, "name": paths.org_name(paths.ORG)}}
+    numbers = tick_numbers(url, up, now)
     block, cap, five = setup.claude_md_status()
-    out.update(org=numbers.get("org"), reading=numbers.get("reading"), labels=numbers.get("labels", 0),
-               review=review_state(now), alerts=numbers.get("alerts", 0), cap=cap, fiveHourCap=five, setup=block)
-    if numbers.get("orgNote"):
-        out["orgNote"] = numbers["orgNote"]
+    out.update(reading=numbers.get("reading"), labels=numbers.get("labels", 0), review=review_state(now),
+               alerts=numbers.get("alerts", 0), cap=cap, fiveHourCap=five, setup=block)
     if not up:
         out["server"] = "not answering"
     print(json.dumps(out, separators=(",", ":")))
 
 
-def watch_summary(hours, org=None):
+def watch_summary(hours):
     url, up = setup.ensure_server(wait_s=0)
     if up:
         try:
-            return server_json(url, "/api/watch" + query(hours="%g" % hours, org=org))
-        except urllib.error.HTTPError as error:
-            if error.code in (400, 403, 404):
-                raise org_error(error)
+            return server_json(url, "/api/watch" + query(hours="%g" % hours, org=paths.ORG))
         except Exception:
             pass
     from . import overview
     store = local_store()
-    scope = store.resolve_org(org)
-    data = store.slice("*", scope)
-    return overview.watch(data, overview.Index(data), store.alerts.list(scope), time.time(), hours)
+    data = store.slice("*")
+    return overview.watch(data, overview.Index(data), store.alerts.list(), time.time(), hours)
 
 
 def rounded(x, nd=1):
@@ -158,13 +140,13 @@ def trim_watch(watch):
                     "monitoring": watch.get("monitoring"), "ab": exp.get("ab"), "runner": exp.get("runner")})
 
 
-def review_context(hours=2.0, org=None):
+def review_context(hours=2.0):
     try:
         with open(log_path(), encoding="utf-8") as f:
             lines = [line[:LOG_LINE] for line in f.read().splitlines()[-LOG_TAIL:]]
     except OSError:
         lines = []
-    print(json.dumps({"watch": trim_watch(watch_summary(hours, org)), "reviewLog": lines}, separators=(",", ":")))
+    print(json.dumps({"watch": trim_watch(watch_summary(hours)), "reviewLog": lines}, separators=(",", ":")))
 
 
 def review_done(text):

@@ -7,12 +7,18 @@ import { arrow, cost, paceText, pct, summarize } from './summary'
 // devtime's perf numbers (pace against the weekly limit, $/h, $/commit, waste, live burners, alerts), read from the
 // local devtime server every minute. No model calls. Only in the devtime session: the one that ran /devtime:start (or
 // /devtime-panel); every other session gets nothing drawn, no polling and no toasts. `/devtime-panel off` ends it.
+//
+// Each organisation on the PC has its own devtime server (devtime/paths.py). A session talks only to the server of its
+// own org: the org is env CLAUDE_CODE_ORGANIZATION_UUID, else the .claude.json login's; the port is that org's
+// <data dir>/orgs/<org>/cache/port.txt, and the server must say (/api/version `org`) that it is that org's. Every
+// request carries the session id and org, which the server checks against its transcripts. No org, no port file or
+// another org's server: nothing is posted or shown.
 
 const PANE = 'devtime'
 const TITLE = 'devtime'
 // What a click opens: the desktop app makes a link only of https: or http://localhost
 let DASHBOARD = 'http://localhost:8765/'
-let URL_BASE = 'http://127.0.0.1:8765'
+let URL_BASE = ''
 const EVERY_MS = 60_000
 const COLUMNS = 46
 
@@ -25,28 +31,66 @@ let timer: { cancel: () => void } | null = null
 
 let lastAlertKey: string | null | undefined
 
-const DEFAULT_PORT = 8765
+const ORG_ID = /^[0-9A-Za-z][0-9A-Za-z-]{3,63}$/
+const trim = (p: string) => p.replace(/[\/]+$/, '')
 
-/** The dashboard's port: <data dir>/cache/port.txt (data dir = DEVTIME_HOME, else ~/.claude/devtime), else 8765. */
-async function dashboardPort($: EngineInterface): Promise<number> {
+async function homeDir($: EngineInterface): Promise<string | undefined> {
+  return (await $.env.get('USERPROFILE')) || (await $.env.get('HOME'))
+}
+
+/** This session's org: env CLAUDE_CODE_ORGANIZATION_UUID, else oauthAccount.organizationUuid of the .claude.json
+ * ($CLAUDE_CONFIG_DIR/.claude.json or ~/.claude.json). null when neither names one. */
+export async function sessionOrg($: EngineInterface): Promise<string | null> {
+  try {
+    const env = ((await $.env.get('CLAUDE_CODE_ORGANIZATION_UUID')) || '').trim()
+    if (env) return ORG_ID.test(env) ? env : null
+    const config = await $.env.get('CLAUDE_CONFIG_DIR')
+    const home = await homeDir($)
+    const file = config ? trim(config) + '/.claude.json' : home ? trim(home) + '/.claude.json' : null
+    if (!file) return null
+    const org = JSON.parse(String(await $.fs.read(file)))?.oauthAccount?.organizationUuid
+    return typeof org === 'string' && ORG_ID.test(org.trim()) ? org.trim() : null
+  } catch {
+    return null
+  }
+}
+
+/** The port of this org's server: <data dir>/orgs/<org>/cache/port.txt (data dir = DEVTIME_HOME, else
+ * ~/.claude/devtime); null without one (no fallback: it could be another org's server). */
+async function orgPort($: EngineInterface, org: string): Promise<number | null> {
   try {
     let dir = await $.env.get('DEVTIME_HOME')
     if (!dir) {
-      const home = (await $.env.get('USERPROFILE')) || (await $.env.get('HOME'))
-      if (!home) return DEFAULT_PORT
-      dir = home.replace(/[\/]+$/, '') + '/.claude/devtime'
+      const home = await homeDir($)
+      if (!home) return null
+      dir = trim(home) + '/.claude/devtime'
     }
-    const text = await $.fs.read(dir.replace(/[\/]+$/, '') + '/cache/port.txt')
+    const text = await $.fs.read(`${trim(dir)}/orgs/${org}/cache/port.txt`)
     const n = parseInt(String(text).trim(), 10)
-    return n > 0 && n < 65536 ? n : DEFAULT_PORT
+    return n > 0 && n < 65536 ? n : null
   } catch {
-    return DEFAULT_PORT
+    return null
   }
+}
+
+/** The base URL of this session's own org's server, after it confirmed being that org's; else null. */
+async function ownServer($: EngineInterface, org: string): Promise<string | null> {
+  const port = await orgPort($, org)
+  if (!port) return null
+  const base = `http://127.0.0.1:${port}`
+  try {
+    const res = await $.http.fetch(base + '/api/version')
+    if (!res.ok || JSON.parse(res.text)?.org !== org) return null
+  } catch {
+    return null
+  }
+  return base
 }
 
 let lastKey = ''
 
-/** Posts a reading to the server; never throws. Identical consecutive readings of this session are not sent twice. */
+/** Posts a reading to this org's server; never throws. Identical consecutive readings of this session are not sent
+ * twice. */
 async function postReading($: EngineInterface, windows: SessionRateLimit[]): Promise<void> {
   try {
     const session = await $.session.id()
@@ -54,9 +98,12 @@ async function postReading($: EngineInterface, windows: SessionRateLimit[]): Pro
     if (!r) return
     const key = JSON.stringify([r.session, r.fiveHour, r.fiveHourReset, r.weekly, r.weeklyReset])
     if (key === lastKey) return
-    const port = await dashboardPort($)
-    const res = await $.http.fetch(`http://127.0.0.1:${port}/api/reading`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(r) })
+    const org = await sessionOrg($)
+    if (!org) return
+    const base = await ownServer($, org)
+    if (!base) return
+    const res = await $.http.fetch(`${base}/api/reading`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...r, org }) })
     if (res.ok) lastKey = key  // a failed post (server down) is tried again with the next measurement
   } catch {
     // silent by design
@@ -64,10 +111,15 @@ async function postReading($: EngineInterface, windows: SessionRateLimit[]): Pro
 }
 
 async function getJson($: EngineInterface, path: string) {
-  const port = await dashboardPort($)  // from <data dir>/cache/port.txt
-  URL_BASE = `http://127.0.0.1:${port}`
-  DASHBOARD = `http://localhost:${port}/`
-  const res = await $.http.fetch(URL_BASE + path)
+  const org = await sessionOrg($)
+  if (!org) throw new Error('the organisation of this session is not known')
+  const base = await ownServer($, org)
+  if (!base) throw new Error('no devtime server of this organisation')
+  URL_BASE = base
+  DASHBOARD = base.replace('127.0.0.1', 'localhost') + '/'
+  const session = await $.session.id()
+  const who = `session=${encodeURIComponent(session)}&org=${encodeURIComponent(org)}`
+  const res = await $.http.fetch(URL_BASE + path + (path.includes('?') ? '&' : '?') + who)
   if (!res.ok) throw new Error(`${path}: HTTP ${res.status}`)
   return JSON.parse(res.text)
 }
@@ -81,7 +133,8 @@ async function refresh($: EngineInterface) {
     if (lastAlertKey !== undefined && s.alertKey && s.alertKey !== lastAlertKey && s.alert) $.ui.toast(`devtime: ${s.alert}`)
     lastAlertKey = s.alertKey
   } catch (e) {
-    await update($, error, () => 'devtime server not answering on ' + URL_BASE)
+    await update($, error, () => URL_BASE ? 'devtime server not answering on ' + URL_BASE
+      : 'no devtime server of this organisation (run /devtime:start in it)')
   }
 }
 

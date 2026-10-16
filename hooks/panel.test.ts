@@ -18,8 +18,26 @@ const PANE = {
     scroll: { offset: 0, bodyRows: 12 }, view: {} },
 }
 
-function host(on: any, fetch: (url: string) => { status: number; ok: boolean; headers: {}; text: string }) {
-  on('http.fetch', async (_$: unknown, e: { url: string }) => ({ value: fetch(e.url) }))
+const ORG = 'aaaa1111-0000-4000-8000-000000000001'
+const OTHER = 'bbbb2222-0000-4000-8000-000000000002'
+const seen: string[] = []
+
+/** A session of org ORG whose org's server (port 8123 in its port.txt) answers /api/version as `serverOrg`. */
+function host(on: any, fetch: (url: string) => { status: number; ok: boolean; headers: {}; text: string },
+  serverOrg = ORG) {
+  seen.length = 0
+  on('session.id', async () => ({ value: 'sess-1' }))
+  on('env.get', async (_$: unknown, e: { name: string }) => ({
+    value: e.name === 'DEVTIME_HOME' ? 'C:/data' : e.name === 'CLAUDE_CODE_ORGANIZATION_UUID' ? ORG : undefined }))
+  on('fs.read', async (_$: unknown, e: { path: string }) => {
+    if (e.path.replace(/\\/g, '/') !== `C:/data/orgs/${ORG}/cache/port.txt`) throw new Error('missing ' + e.path)
+    return { value: '8123' }
+  })
+  on('http.fetch', async (_$: unknown, e: { url: string }) => {
+    seen.push(e.url)
+    if (e.url.endsWith('/api/version')) return { value: { status: 200, ok: true, headers: {}, text: JSON.stringify({ org: serverOrg }) } }
+    return { value: fetch(e.url) }
+  })
   on('ui.open', async () => ({ value: { isPlaced: true } }))
   on('ui.status', async () => ({ value: undefined }))
   on('ui.toast', async () => ({ value: undefined }))
@@ -37,7 +55,7 @@ test('summary reduces the overview', async () => {
 })
 
 test('pane shows the perf lines on terminal and desktop', async ($, on) => {
-  host(on, url => ({ status: 200, ok: true, headers: {}, text: JSON.stringify(url.endsWith('/api/alerts') ? ALERTS : OVERVIEW) }))
+  host(on, url => ({ status: 200, ok: true, headers: {}, text: JSON.stringify(url.includes('/api/alerts') ? ALERTS : OVERVIEW) }))
   await $.command.run({ command: 'devtime-panel' })
   for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await $.ui.mount({ plugin: 'devtime', surface, ...PANE })
@@ -47,6 +65,22 @@ test('pane shows the perf lines on terminal and desktop', async ($, on) => {
     expect(await ui.find({ type: 'Link' })).toBeDefined()
     await ui.unmount()
   }
+  const data = seen.filter(u => !u.endsWith('/api/version'))
+  expect(data.length > 0).toBe(true)
+  for (const u of data) {
+    expect(u.startsWith('http://127.0.0.1:8123/api/')).toBe(true)
+    expect(u.includes(`session=sess-1&org=${ORG}`)).toBe(true)
+  }
+})
+
+test('pane shows nothing of another org\'s server', async ($, on) => {
+  host(on, url => ({ status: 200, ok: true, headers: {}, text: JSON.stringify(url.includes('/api/alerts') ? ALERTS : OVERVIEW) }), OTHER)
+  await $.command.run({ command: 'devtime-panel' })
+  const ui = await $.ui.mount({ plugin: 'devtime', surface: 'desktop', ...PANE })
+  expect(await ui.find({ type: 'Text', text: /Perf dashboard/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /no devtime server of this organisation/ })).toBeDefined()
+  expect(seen.filter(u => !u.endsWith('/api/version')).length).toBe(0)
+  await ui.unmount()
 })
 
 const WITH_ALLOWANCE = { ...OVERVIEW, limits: { ...OVERVIEW.limits, allowance: 3000 } }
@@ -58,7 +92,7 @@ test('costs are shares of the week once there is an allowance', async ($, on) =>
   expect(cost(s, 9)).toBe('0.30%')
   expect(cost(s, 90)).toBe('3.0%')
   expect(cost(summarize(OVERVIEW, [], 0), 9)).toBe('$9.00')
-  host(on, url => ({ status: 200, ok: true, headers: {}, text: JSON.stringify(url.endsWith('/api/alerts') ? ALERTS : WITH_ALLOWANCE) }))
+  host(on, url => ({ status: 200, ok: true, headers: {}, text: JSON.stringify(url.includes('/api/alerts') ? ALERTS : WITH_ALLOWANCE) }))
   await $.command.run({ command: 'devtime-panel' })
   const ui = await $.ui.mount({ plugin: 'devtime', surface: 'desktop', ...PANE })
   expect(await ui.find({ type: 'Text', text: /0\.30% each/ })).toBeDefined()
@@ -75,7 +109,7 @@ test('pane says when the server is down', async ($, on) => {
 })
 
 test('band shows one line of pace and rate', async ($, on) => {
-  host(on, url => ({ status: 200, ok: true, headers: {}, text: JSON.stringify(url.endsWith('/api/alerts') ? ALERTS : OVERVIEW) }))
+  host(on, url => ({ status: 200, ok: true, headers: {}, text: JSON.stringify(url.includes('/api/alerts') ? ALERTS : OVERVIEW) }))
   await $.command.run({ command: 'devtime-panel' })
   for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await $.ui.mount({ plugin: 'devtime', surface, component: 'AbovePrompt',
@@ -91,7 +125,7 @@ test('other sessions get no band', async ($, on) => {
     const { Text } = $.ui.resolve(e)
     return h(Text, null, 'engine band')
   })
-  host(on, url => ({ status: 200, ok: true, headers: {}, text: JSON.stringify(url.endsWith('/api/alerts') ? ALERTS : OVERVIEW) }))
+  host(on, url => ({ status: 200, ok: true, headers: {}, text: JSON.stringify(url.includes('/api/alerts') ? ALERTS : OVERVIEW) }))
   await $.command.run({ command: 'devtime-panel' })
   await $.command.run({ command: 'devtime-panel', args: 'off' })
   const ui = await $.ui.mount({ plugin: 'devtime', surface: 'desktop', component: 'AbovePrompt',
@@ -109,50 +143,78 @@ function measure(windows: typeof WINDOWS, changed: string[] = ['rateLimits']) {
 }
 
 const posts: { url: string; body: any }[] = []
-const serverState = { down: false, port: '8123' }
+const serverState = { down: false, port: '8123', org: ORG, env: ORG as string | undefined, claudeJson: '' }
 
 function readingHost(on: any) {
   posts.length = 0
   on('session.id', async () => ({ value: 'sess-1' }))
   on('session.measure', async () => ({ changed: ['rateLimits'] }))
-  on('env.get', async (_$: unknown, e: { name: string }) => ({ value: e.name === 'DEVTIME_HOME' ? 'C:/data' : undefined }))
+  on('env.get', async (_$: unknown, e: { name: string }) => ({
+    value: e.name === 'DEVTIME_HOME' ? 'C:/data' : e.name === 'USERPROFILE' ? 'C:/Users/u'
+      : e.name === 'CLAUDE_CODE_ORGANIZATION_UUID' ? serverState.env : undefined }))
   on('fs.read', async (_$: unknown, e: { path: string }) => {
-    if (!/cache[\\/]port[.]txt$/.test(e.path)) throw new Error('missing ' + e.path)
+    const path = e.path.replace(/\\/g, '/')
+    if (path === 'C:/Users/u/.claude.json' && serverState.claudeJson) return { value: serverState.claudeJson }
+    if (!/^C:\/data\/orgs\/[^/]+\/cache\/port[.]txt$/.test(path)) throw new Error('missing ' + e.path)
     return { value: serverState.port }
   })
   on('http.fetch', async (_$: unknown, e: { url: string; init?: { body?: string } }) => {
-    posts.push({ url: e.url, body: e.init?.body ? JSON.parse(e.init.body) : null })
     if (serverState.down) throw new Error('connection refused')
+    if (e.url.endsWith('/api/version')) return { value: { status: 200, ok: true, headers: {}, text: JSON.stringify({ org: serverState.org }) } }
+    posts.push({ url: e.url, body: e.init?.body ? JSON.parse(e.init.body) : null })
     return { value: { status: 200, ok: true, headers: {}, text: '{}' } }
   })
 }
 
-test('measure posts the plan readings to the port in port.txt, in any session', async ($, on) => {
-  serverState.down = false
-  serverState.port = '8123'
+function reset(state: Partial<typeof serverState> = {}) {
+  Object.assign(serverState, { down: false, port: '8123', org: ORG, env: ORG, claudeJson: '' }, state)
+}
+
+test('measure posts the plan readings to its own org\'s server, in any session', async ($, on) => {
+  reset()
   readingHost(on)
   const result = await $.session.measure(measure(WINDOWS))
   expect(result.changed).toEqual(['rateLimits'])
   expect(posts.length).toBe(1)
   expect(posts[0]?.url).toBe('http://127.0.0.1:8123/api/reading')
   expect(posts[0]?.body.session).toBe('sess-1')
+  expect(posts[0]?.body.org).toBe(ORG)
   expect(posts[0]?.body.fiveHour).toBe(14.5)
   expect(posts[0]?.body.weekly).toBe(74)
   expect(posts[0]?.body.weeklyReset).toBe('2026-10-20T00:00:00Z')
 })
 
 test('measure without plan windows posts nothing', async ($, on) => {
+  reset()
   readingHost(on)
   await $.session.measure(measure([]))
   await $.session.measure(measure([{ kind: 'spend_limit', percentUsed: 5 }] as any))
   expect(posts.length).toBe(0)
 })
 
-test('measure survives a missing port file and a dead server', async ($, on) => {
+test('measure survives a missing port file and a dead server, and posts nowhere else', async ($, on) => {
+  reset({ port: 'junk' })
   readingHost(on)
-  serverState.down = true
-  serverState.port = 'junk'
   const result = await $.session.measure(measure([{ kind: 'seven_day', percentUsed: 51 }] as any))
   expect(result.changed).toEqual(['rateLimits'])
-  expect(posts[0]?.url).toBe('http://127.0.0.1:8765/api/reading')
+  reset({ down: true })
+  await $.session.measure(measure([{ kind: 'seven_day', percentUsed: 52 }] as any))
+  expect(posts.length).toBe(0)
+})
+
+test('measure posts nothing to another org\'s server or without an org', async ($, on) => {
+  reset({ org: OTHER })
+  readingHost(on)
+  await $.session.measure(measure([{ kind: 'seven_day', percentUsed: 53 }] as any))
+  reset({ env: undefined })
+  await $.session.measure(measure([{ kind: 'seven_day', percentUsed: 54 }] as any))
+  expect(posts.length).toBe(0)
+})
+
+test('measure takes the org of the .claude.json login when the env has none', async ($, on) => {
+  reset({ env: undefined, claudeJson: JSON.stringify({ oauthAccount: { organizationUuid: ORG } }) })
+  readingHost(on)
+  await $.session.measure(measure([{ kind: 'seven_day', percentUsed: 55 }] as any))
+  expect(posts.length).toBe(1)
+  expect(posts[0]?.body.org).toBe(ORG)
 })

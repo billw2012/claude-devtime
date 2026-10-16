@@ -172,7 +172,7 @@ class Builder:
             pname = project.name if project else auto_project_name(desk.get("originCwd") or cwd, d["folder"])
             title = desk.get("title") or d.get("title") or st.title or d["session"][:8]
             desc = ""
-            org = orgs.resolve(st.org, d["session"], self.desktop_orgs)
+            org = d.get("org") or orgs.resolve(st.org, d["session"], self.desktop_orgs)
         else:
             parent_entry = mains.get((d["folder"], d["session"]))
             parent = info.get(parent_entry[0]["path"]) if parent_entry else None
@@ -181,7 +181,8 @@ class Builder:
             title = parent["title"] if parent else d["session"][:8]
             meta = d.get("meta") or {}
             desc = meta.get("description") or d.get("agent", "")
-            org = st.org or (parent["org"] if parent else None) or orgs.resolve(None, d["session"], self.desktop_orgs)
+            org = d.get("org") or st.org or (parent["org"] if parent else None) or orgs.resolve(None, d["session"],
+                                                                                            self.desktop_orgs)
         idx = len(self.transcripts)
         meta = d.get("meta") or {}
         t = {
@@ -617,14 +618,14 @@ def split_hours(a, b, weight):
 
 
 def subset(data, project, org=None):
-    """The dataset restricted to one project and / or one organisation (transcripts, their intervals and token rows),
-    re-indexed. Unreal runs are kept for an org only when they are linked to one of its transcripts."""
+    """The dataset restricted to one project and / or a set of organisations `org` (transcripts, their intervals and
+    token rows), re-indexed. With `org`, Unreal runs are kept only when they are linked to one of its transcripts."""
     if not project or project == "*":
         project = None
     if not project and org is None:
         return data
     keep = [t for t in data["transcripts"] if (not project or t["project"] == project)
-            and (org is None or t.get("org") == org)]
+            and (org is None or t.get("org") in org)]
     remap = {t["idx"]: i for i, t in enumerate(keep)}
     transcripts = []
     for i, t in enumerate(keep):
@@ -646,8 +647,6 @@ def subset(data, project, org=None):
     out.update(transcripts=transcripts, iv=new_iv, tok=new_tok, hours=hours)
     if project:
         out["project"] = project
-    if org is not None:
-        out["org"] = org
     out["launchScripts"] = {str(rowmap[int(n)]): s for n, s in data.get("launchScripts", {}).items()
                             if int(n) in rowmap}
     ue = data.get("ue")

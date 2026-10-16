@@ -91,7 +91,6 @@ class Config:
         self.rules = [Rule(r) for r in base.get("rules", [])]
         self.pre_rules = [Rule(r) for r in base.get("pre_rules", [])]
         self.unreal = base.get("unreal", {})
-        self.org_names = {str(k): str(v) for k, v in (base.get("orgs") or {}).items()}  # 8-char org prefix -> name
         self.projects = []
         seen = set()
         for path in self.project_files():
@@ -115,10 +114,13 @@ class Config:
         return max(os.path.getmtime(f) for f in files if os.path.exists(f))
 
     def path(self, key):
-        """A path setting; cache_dir defaults to the data directory's cache. Relative paths are under the data dir."""
+        """A path setting. cache_dir is always the current org's instance cache (paths.CACHE): a shared cache folder
+        would mix organisations. Relative paths are under the data dir."""
+        if key == "cache_dir":
+            return paths.CACHE
         value = os.path.expanduser(self.settings.get(key, "") or "")
         if not value:
-            return paths.CACHE if key == "cache_dir" else paths.DATA
+            return paths.DATA
         return value if os.path.isabs(value) else os.path.join(paths.DATA, value)
 
     def project_for(self, cwd):

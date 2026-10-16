@@ -58,7 +58,9 @@ def main():
         os.replace(LOG, LOG + ".old")
     flags = 0
     if os.name == "nt":
-        flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
+        # A hidden console of its own, not DETACHED_PROCESS: Windows ignores CREATE_NO_WINDOW with DETACHED_PROCESS, and
+        # console-less, every scan pool worker (scan.py) would open its own visible console window.
+        flags = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
     with open(LOG, "a", encoding="utf-8") as log:
         env = dict(os.environ, **{paths.ORG_ENV: paths.ORG})  # the server is this org's whatever else changes
         subprocess.Popen([sys.executable, "-u", "-m", "devtime", "serve", "--no-open", "--port", str(number)], cwd=ROOT, stdout=log, env=env,

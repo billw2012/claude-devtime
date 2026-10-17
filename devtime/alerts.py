@@ -65,6 +65,7 @@ DEFAULTS = {
     "live_s": 900,  # only transcripts with a request this recent
     "keep_s": 6 * 3600,  # how long resolved alerts stay listed
     "readonly_calls": 12, "readonly_cost": 0.5,  # a non-Haiku subagent with this many calls and no edit
+    "readonly_min": 15,  # ... over at least this many minutes (coders read for a few minutes before editing)
     "poll_count": 4, "poll_context": 150_000,  # main session: job checks in the last 30 min, at this context
 }
 
@@ -177,10 +178,13 @@ def check(data, config, now=None):
         calls = [(iv["s"][i], kinds[iv["k"][i]], labels[iv["l"][i]]) for i in by_t.get(t, [])]
         desc = tr.get("description") or ""
         runner = tr.get("agentType") == "runner" or RUNNER.match(desc)
-        if sub and not runner and "haiku" not in model and not JUDGEMENT.search(desc) and not AB.match(desc) \
-                and not IMPLEMENT.search(desc):
+        coder = "coder" in (tr.get("agentType") or "")  # the coder agent types: they write code after reading
+        if sub and not runner and not coder and "haiku" not in model and not JUDGEMENT.search(desc) \
+                and not AB.match(desc) and not IMPLEMENT.search(desc):
             edits = sum(1 for c in calls if c[1] == "edit code")
-            if not edits and len(calls) >= th["readonly_calls"] and total >= th["readonly_cost"]:
+            age = (calls[-1][0] - calls[0][0]) / 60 if calls else 0
+            if not edits and len(calls) >= th["readonly_calls"] and total >= th["readonly_cost"] \
+                    and age >= th["readonly_min"]:
                 add("read-only on a big model", 1, total,
                     f"has made {len(calls)} tool calls, none of them edits, on {model} ({fmt_money(total)})")
         if sub and not runner and not AB.match(desc) and tr.get("session") in ab_sessions \

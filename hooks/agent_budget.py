@@ -23,7 +23,7 @@ through hooks/run.sh so the right Python is found.
 5. Slots (devtime/slotrules.py, every session, Bash / PowerShell): a command matching a rule of the machine-wide
    slots.toml is rewritten (updatedInput) to run under `<launcher> slot run <resource> ...`, so it queues FIFO with
    every other session's heavy jobs; loops that wait for another process or a lock file are denied with a pointer to
-   `slot run`. In subagents such a loop also counts as a long wait whatever its timeout. Env DEVTIME_SLOTS=0 (or
+   `slot run` (a main session's run_in_background wait is let through). In subagents such a loop also counts as a long wait whatever its timeout. Env DEVTIME_SLOTS=0 (or
    DEVTIME_SLOTS=0 in the command) leaves commands alone.
 
 4. A/B experiments (devtime/ab.py): an Agent / Task launch whose description starts "AB:<experiment>:<stage>" of an
@@ -309,7 +309,7 @@ def slot_check(data):
     try:
         from devtime import slotrules
         result = slotrules.hook_check(data["tool_name"], data.get("tool_input") or {}, data.get("cwd"),
-                                      paths.launcher_path())
+                                      paths.launcher_path(), subagent=bool(data.get("agent_id")))
         if result and result[0] == "wrap":
             paths.install_launcher(ROOT)  # the stable launcher the wrapped command calls, current with this plugin
         return result

@@ -329,6 +329,13 @@ class Rules(SlotsBase):
         for cmd in ("tasklist | grep UnrealEditor", "while read l; do echo $l; done < f.txt", "sleep 2; ls"):
             self.assertIsNone(slotrules.hand_rolled_wait(cmd), cmd)
 
+    def test_main_session_background_wait_allowed(self):
+        loop = {"command": "while pgrep -f fakeheavy >/dev/null; do sleep 30; done", "run_in_background": True}
+        self.assertIsNone(slotrules.hook_check("Bash", loop, "D:/x", "L", subagent=False))
+        self.assertEqual(slotrules.hook_check("Bash", loop, "D:/x", "L", subagent=True)[0], "deny")
+        fg = {"command": loop["command"]}
+        self.assertEqual(slotrules.hook_check("Bash", fg, "D:/x", "L", subagent=False)[0], "deny")
+
 
 class Hook(SlotsBase):
     def setUp(self):

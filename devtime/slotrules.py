@@ -409,8 +409,10 @@ def config():
     return _CONFIG
 
 
-def hook_check(tool, inp, cwd, launcher=None, cfg=None):
-    """For the PreToolUse hook: None (leave the call alone), ("deny", reason) or ("wrap", new input, note)."""
+def hook_check(tool, inp, cwd, launcher=None, cfg=None, subagent=True):
+    """For the PreToolUse hook: None (leave the call alone), ("deny", reason) or ("wrap", new input, note).
+    A main session's run_in_background wait for another job is let through (it costs nothing until it ends and then
+    wakes the session); subagents and foreground waits are denied."""
     if tool not in ("Bash", "PowerShell"):
         return None
     cmd = str(inp.get("command") or "")
@@ -419,7 +421,7 @@ def hook_check(tool, inp, cwd, launcher=None, cfg=None):
     launcher = launcher or paths.launcher_path()
     show = 'python "%s" slot' % launcher.replace("\\", "/")
     what = hand_rolled_wait(cmd)
-    if what:
+    if what and (subagent or not inp.get("run_in_background")):
         return ("deny", "devtime slots: this loop waits for %s to finish. Don't hand-roll waits for other jobs (they "
                         "hold a session or agent for as long as the other job runs and nobody sees them in the queue): "
                         "run your own job under a machine-wide slot instead, `%s run <resource> --label \"...\" -- "

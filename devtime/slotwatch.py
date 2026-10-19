@@ -739,15 +739,23 @@ class Watcher:
         procs = self.table.procs()
         results, keep = [], set()
         for pid, (_ppid, name) in procs.items():
-            entry = next((w for w in cfg.watch if w["name"].search(name or "")), None)
-            if not entry:
+            entries = [w for w in cfg.watch if w["name"].search(name or "")]
+            if not entries:
                 continue
             key = (pid, self.table.start(pid))
             keep.add(key)
             if key in self.done:
                 continue
             self.done.add(key)
-            if entry["args"] and not entry["args"].search(" " + " ".join((self.table.argv(pid) or [])[1:])):
+            line = None  # the first entry whose args (if any) the command line has: e.g. -nullrhi -> test, else gpu
+            for entry in entries:
+                if entry["args"]:
+                    if line is None:
+                        line = " " + " ".join((self.table.argv(pid) or [])[1:])
+                    if not entry["args"].search(line):
+                        continue
+                break
+            else:
                 continue
             try:
                 r = analyze(pid, procs, self.table, cfg, entry)

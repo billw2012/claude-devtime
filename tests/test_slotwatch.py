@@ -73,12 +73,16 @@ class Base(unittest.TestCase):
         m = slotrules.match(cmd, tool, cwd or self.proj, slotrules.Config())
         return m and "+".join(m["resources"])
 
-    def capture(self, script="Tools/Dev/capture_crowd.sh", args=" --n 3", heavy=("UnrealEditor-Cmd.exe", UE + " P.uproject")):
+    def capture(self, script="Tools/Dev/capture_crowd.sh", args=" --n 3", heavy=("UnrealEditor-Cmd.exe", UE + " P.uproject -nullrhi")):
         return self.table([("bash.exe", claude_bash("bash %s%s" % (script, args))),
                            ("bash.exe", '"%s" %s%s' % (USRBASH, script, args)), heavy])
 
 
 class Learning(Base):
+    def test_rendering_editor_run_is_gpu(self):
+        [r] = self.scan(self.capture(heavy=("UnrealEditor.exe", UE + " P.uproject -game")), dry=True)
+        self.assertEqual((r["status"], r["resource"]), ("learn", "gpu"))
+
     def test_learns_script_per_watch_entry(self):
         [r] = self.scan(self.capture())
         self.assertEqual((r["status"], r["script"], r["project"], r["resource"]),
@@ -105,13 +109,13 @@ class Learning(Base):
         wrapped = self.table([("bash.exe", claude_bash("x")),
                               ("python.exe", 'python C:/Users/u/.claude/devtime/devtime.py slot run test --label "x" '
                                              '--shell bash'),
-                              ("bash.exe", "bash Tools/Dev/capture_crowd.sh"), ("UnrealEditor-Cmd.exe", UE)])
+                              ("bash.exe", "bash Tools/Dev/capture_crowd.sh"), ("UnrealEditor-Cmd.exe", UE + " -nullrhi")])
         self.assertEqual(self.scan(wrapped)[0]["reason"], "already queued (slot run)")
         by_hand = slotwatch.StaticTable([
             {"pid": 5, "ppid": 1, "name": "WindowsTerminal.exe", "cmdline": "wt"},
             {"pid": 6, "ppid": 5, "name": "bash.exe", "cmdline": "bash"},
             {"pid": 7, "ppid": 6, "name": "bash.exe", "cmdline": "bash Tools/Dev/capture_crowd.sh", "cwd": self.proj},
-            {"pid": 8, "ppid": 7, "name": "UnrealEditor-Cmd.exe", "cmdline": UE}])
+            {"pid": 8, "ppid": 7, "name": "UnrealEditor-Cmd.exe", "cmdline": UE + " -nullrhi"}])
         self.assertEqual(self.scan(by_hand)[0]["status"], "skip")
         ubt = self.capture(heavy=("UnrealEditor.exe", "UnrealEditor.exe P.uproject"))
         ubt.rows[14] = {"pid": 14, "ppid": 13, "name": "UnrealBuildTool.exe", "cmdline": "UnrealBuildTool.exe"}
@@ -123,18 +127,18 @@ class Learning(Base):
         t = slotwatch.StaticTable([
             {"pid": 7, "ppid": 99, "name": "bash.exe", "cmdline": '"%s" Tools/Dev/build_test.sh X' % USRBASH,
              "cwd": self.proj},
-            {"pid": 8, "ppid": 7, "name": "UnrealEditor-Cmd.exe", "cmdline": UE}])
+            {"pid": 8, "ppid": 7, "name": "UnrealEditor-Cmd.exe", "cmdline": UE + " -nullrhi"}])
         [r] = self.scan(t)
         self.assertEqual((r["status"], r["script"], r.get("orphan")), ("learn", "Tools/Dev/build_test.sh", True))
 
     def test_refuses_generic_launchers(self):
         loop = self.table([("bash.exe", claude_bash('for i in 1 2; do "$UE" P.uproject; done')),
-                           ("UnrealEditor-Cmd.exe", UE)])
+                           ("UnrealEditor-Cmd.exe", UE + " -nullrhi")])
         make = self.table([("bash.exe", claude_bash("make capture")), ("make.exe", "make capture"),
-                           ("UnrealEditor-Cmd.exe", UE)])
+                           ("UnrealEditor-Cmd.exe", UE + " -nullrhi")])
         temp = self.table([("bash.exe", claude_bash("bash /tmp/x.sh")), ("bash.exe", "bash /tmp/x.sh"),
-                           ("UnrealEditor-Cmd.exe", UE)])
-        two = self.table([("bash.exe", claude_bash("bash Tools/a.sh; bash Tools/b.sh")), ("UnrealEditor-Cmd.exe", UE)])
+                           ("UnrealEditor-Cmd.exe", UE + " -nullrhi")])
+        two = self.table([("bash.exe", claude_bash("bash Tools/a.sh; bash Tools/b.sh")), ("UnrealEditor-Cmd.exe", UE + " -nullrhi")])
         for t in (loop, make, temp, two):
             [r] = self.scan(t)
             self.assertEqual(r["status"], "unlearnable", r)
@@ -148,7 +152,7 @@ class Learning(Base):
         t = self.table([("bash.exe", claude_bash("bash D:/tools/wrap.sh Tools/run_all.sh")),
                         ("bash.exe", "bash D:/tools/wrap.sh Tools/run_all.sh"),
                         ("bash.exe", "bash Tools/run_all.sh"), ("bash.exe", "bash Tools/Dev/capture_crowd.sh"),
-                        ("UnrealEditor-Cmd.exe", UE)])
+                        ("UnrealEditor-Cmd.exe", UE + " -nullrhi")])
         [r] = self.scan(t)
         self.assertEqual(r["script"], "Tools/run_all.sh")
 
@@ -157,7 +161,7 @@ class Learning(Base):
         enc = base64.b64encode(cmd.encode("utf-16-le")).decode()
         for top in ('powershell.exe -NoProfile -NonInteractive -Command "%s"' % cmd,
                     "pwsh.exe -NoProfile -EncodedCommand %s" % enc):
-            [r] = self.scan(self.table([("powershell.exe", top), ("UnrealEditor-Cmd.exe", UE)]), dry=True)
+            [r] = self.scan(self.table([("powershell.exe", top), ("UnrealEditor-Cmd.exe", UE + " -nullrhi")]), dry=True)
             self.assertEqual((r["status"], r["script"]), ("learn", "Tools/Dev/run_checks.ps1"), top)
 
     def test_quiet_pattern_and_quiet_if(self):

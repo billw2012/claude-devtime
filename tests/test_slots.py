@@ -299,14 +299,15 @@ class Rules(SlotsBase):
         return m and "+".join(m["resources"])
 
     def test_program_position(self):
-        self.assertEqual(self.match('"C:/UE 5/Engine/Binaries/Win64/UnrealEditor-Cmd.exe" P.uproject -run=x'), "test")
-        self.assertEqual(self.match("cd /d/p && UnrealEditor-Cmd P.uproject 2>&1 | tail -20"), "test")
+        self.assertEqual(self.match('"C:/UE 5/Engine/Binaries/Win64/UnrealEditor-Cmd.exe" P.uproject -run=x -nullrhi'), "test")
+        self.assertEqual(self.match('"C:/UE 5/Engine/Binaries/Win64/UnrealEditor.exe" P.uproject -game'), "gpu")
+        self.assertEqual(self.match("cd /d/p && UnrealEditor-Cmd P.uproject 2>&1 | tail -20"), "gpu")
         self.assertEqual(self.match("bash Tools/fakeheavy.sh a b"), "test")
         self.assertEqual(self.match("timeout 600 python -u fakeheavy.py"), "test")
         self.assertEqual(self.match("FOO=1 ./fakegpu --x"), "gpu")
         self.assertEqual(self.match('cmd /c "D:\\UE\\Engine\\Build\\BatchFiles\\Build.bat" X Win64'), "build")
         self.assertEqual(self.match("./fakeheavy && ./fakegpu"), "test+gpu")
-        self.assertEqual(self.match('$ue = "C:\\UE\\UnrealEditor-Cmd.exe"\n& $ue P.uproject', "PowerShell"), "test")
+        self.assertEqual(self.match('$ue = "C:\\UE\\UnrealEditor-Cmd.exe"\n& $ue P.uproject -run=x', "PowerShell"), "test")
         self.assertEqual(self.match("blender -b scene.blend -P render.py"), "gpu")
         self.assertEqual(self.match("bash -c 'fakeheavy --x'"), "test")
         for cmd in ("grep -r UnrealEditor-Cmd Source/", "tasklist | findstr UnrealEditor", "cat Build.bat",

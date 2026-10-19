@@ -7,7 +7,8 @@
     python -m devtime slot log [--since 2h] [--json]
     python -m devtime slot rules [--project P] | test COMMAND [--tool Bash] [--cwd DIR]
     python -m devtime slot add-rule --project P --match RE --resource R [--cwd RE] [--exclusive] [--max-hold MIN]
-    python -m devtime slot remove-rules --project P
+    python -m devtime slot remove-rules --project P | --learned [--project P]
+    python -m devtime slot watch [--once] [--dry-run]   the rule-learning watcher (devtime/slotwatch.py; the server runs it)
 
 `run` takes a ticket, waits its turn, runs the command as a child and releases when it exits, with the child's exit
 code (or EXIT_TIMEOUT / EXIT_CALLER_GONE / EXIT_KILLED below). With --shell the command is a shell command line taken
@@ -692,10 +693,13 @@ def rules_cmd(args):
     for r in cfg.rules:
         if args.project and str(r.project or "").lower() != args.project.lower():
             continue
-        print("%-8s %s%s%s%s  [%s]" % (r.resource, r.match_text, " exclusive" if r.exclusive else "",
-                                       " cwd~%s" % r.cwd.pattern if r.cwd else "",
-                                       " project=%s" % r.project if r.project else "",
-                                       "user" if r.source != slotrules.SHIPPED else "shipped"))
+        if args.learned and not r.learned:
+            continue
+        kind = "learned" if r.learned else "shipped" if r.source == slotrules.SHIPPED else "user"
+        seen = " seen %sx, last %s" % (r.spec.get("seen", 1), r.spec.get("last_seen")) if r.learned else ""
+        print("%-8s %s%s%s%s  [%s%s]" % (r.resource, r.match_text, " exclusive" if r.exclusive else "",
+                                         " cwd~%s" % r.cwd.pattern if r.cwd else "",
+                                         " project=%s" % r.project if r.project else "", kind, seen))
     return 0
 
 
@@ -746,11 +750,25 @@ def add_rule(args):
         return 1
     with open(path, "w", encoding="utf-8", newline="\n") as f:
         f.write(new)
-    print("added to %s: %s -> %s" % (path, args.match, args.resource))
+    stored = (tomllib.loads(new).get("rule") or [{}])[-1].get("match")
+    print("added to %s: %s -> %s" % (path, stored, args.resource))
+    if re.search(r"(?<!\\)\\/", args.match):
+        print("note: `\\/` in the regex matches only '/'. For either separator write [\\\\/] and pass the regex in "
+              "single quotes ('...'): inside double quotes bash turns \\\\ into \\, halving backslashes before "
+              "devtime sees them (the regex is stored exactly as received, as a TOML literal string)")
     return 0
 
 
 def remove_rules(args):
+    if args.learned:
+        from . import slotwatch
+        n = slotwatch.remove_learned(args.project)
+        print("removed %d learned rule(s)%s from %s" % (n, " of project %s" % args.project if args.project else "",
+                                                          slotrules.learned_file()))
+        return 0
+    if not args.project:
+        err("remove-rules needs --project P (or --learned)")
+        return EXIT_USAGE
     path = slotrules.user_file()
     try:
         with open(path, encoding="utf-8") as f:
@@ -795,6 +813,7 @@ def main(argv):
     q.add_argument("--json", action="store_true")
     q = sub.add_parser("rules")
     q.add_argument("--project")
+    q.add_argument("--learned", action="store_true", help="only rules the watcher learned")
     q = sub.add_parser("test")
     q.add_argument("command_text")
     q.add_argument("--tool", default="Bash")
@@ -807,7 +826,12 @@ def main(argv):
     q.add_argument("--exclusive", action="store_true")
     q.add_argument("--max-hold", type=float)
     q = sub.add_parser("remove-rules")
-    q.add_argument("--project", required=True)
+    q.add_argument("--project")
+    q.add_argument("--learned", action="store_true", help="the watcher's learned rules (of --project, else all)")
+    q = sub.add_parser("watch")
+    q.add_argument("--once", action="store_true", help="one check, print what it finds")
+    q.add_argument("--dry-run", action="store_true", help="with --once: learn nothing, log nothing")
+    q.add_argument("--table", help="with --once: a JSON process table instead of the live one (testing)")
     argv = list(argv)
     tail = []
     if argv[:1] == ["run"] and "--" in argv:  # everything after -- is the command, options included
@@ -818,7 +842,12 @@ def main(argv):
         args.command = list(args.command) + tail
         return run(args)
     return {"status": status, "kill": kill, "log": log_cmd, "rules": rules_cmd, "test": test_cmd,
-            "add-rule": add_rule, "remove-rules": remove_rules}[args.cmd](args)
+            "add-rule": add_rule, "remove-rules": remove_rules, "watch": _watch}[args.cmd](args)
+
+
+def _watch(args):
+    from . import slotwatch
+    return slotwatch.watch_cmd(args)
 
 
 # ---------------------------------------------------------------------------------------------------- dashboard
@@ -868,7 +897,13 @@ def summary(now=None, hours=24, org=None, cfg=None):
             "queue": [t for t in pub if t.get("state") == "waiting"],
             "waits": {k: [round(x, 1) for x in v] for k, v in waits.items()},
             "holds": {k: [round(x, 1) for x in v] for k, v in holds.items()}, "counts": counts,
-            "recent": [_public(r, org) for r in rows[-20:]], "alertWaitMin": cfg.settings.get("alert_wait_min", 20)}
+            "recent": [_public(r, org) for r in rows[-20:]], "alertWaitMin": cfg.settings.get("alert_wait_min", 20),
+            "learn": bool(cfg.settings.get("learn", True)),
+            "learned": sorted(({"script": r.spec.get("script") or r.match_text, "resource": r.resource,
+                                "project": r.project, "heavy": r.spec.get("heavy"), "seen": r.spec.get("seen", 1),
+                                "first_seen": r.spec.get("first_seen"), "last_seen": r.spec.get("last_seen")}
+                               for r in cfg.rules if r.learned), key=lambda x: str(x["last_seen"] or ""),
+                              reverse=True)[:30]}
 
 
 def wait_alerts(now, org, cfg=None):

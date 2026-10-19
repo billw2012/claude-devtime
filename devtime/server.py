@@ -212,6 +212,9 @@ def serve(store, host=None, port=None, open_browser=True):
                 store.log("refresh failed:", repr(error))
 
     threading.Thread(target=loop, daemon=True).start()
+    if not os.environ.get("DEVTIME_NO_SLOT_WATCH"):  # learns slot rules (one watcher machine-wide, by OS lock)
+        from . import slotwatch
+        threading.Thread(target=slotwatch.run_forever, args=(store.log,), daemon=True, name="slotwatch").start()
     httpd = ThreadingHTTPServer((host, port), make_handler(store))
     ports.record(port)
     url = f"http://{host}:{port}/"

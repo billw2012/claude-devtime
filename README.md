@@ -75,7 +75,11 @@ running autonomously) share the GPU, headless editor / test runs and builds thro
 (default `gpu`=2, `test`=3, `build`=2 at once; `quiet` = test+gpu exclusively). The plugin's hook queues any command
 that matches a rule in `~/.claude/devtime/config/slots.toml` by rewriting it to
 `python ~/.claude/devtime/devtime.py slot run <resource> -- <command>`. The rules ship covering UnrealEditor(-Cmd),
-Build.bat / RunUAT / ue-parallel-build and background Blender, and the skill adds rules for a project's own scripts. A
+Build.bat / RunUAT / ue-parallel-build and background Blender, and rules for a project's own scripts are **learned
+automatically**: the devtime server watches for heavy programs (UnrealEditor, `blender -b`, UBT) started by a Claude
+Code shell outside the queue, finds the project script that started them and writes a rule for it
+(`slot rules --learned` lists them; timing runs, `perf` / `measure` / `benchmark` ..., are queued `quiet`). The skill
+is optional: review or adjust learned rules and add ones learning can't see. A
 slot frees itself however its job ends (crash, kill, closed session, reboot), and the hook refuses loops that wait for
 another process or a lock file. `slot status` shows who holds what and who waits; the dashboard shows queue waits and
 alerts a session whose ticket waits over 20 min. `DEVTIME_SLOTS=0` turns the wrapping off.

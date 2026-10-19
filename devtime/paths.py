@@ -115,19 +115,63 @@ LAUNCHER = '''"""Stable entry point for DevTime (written by the plugin at sessio
     python devtime.py <args>      same as `python -m devtime <args>` with the plugin root in plugin_root.txt, run in
                                   this process and in the caller's working directory (`slot run` needs both)
 """
+import json
 import os
+import re
 import sys
+
+
+def version(root):
+    try:
+        with open(os.path.join(root, ".claude-plugin", "plugin.json"), encoding="utf-8") as f:
+            return tuple(int(x) for x in re.findall(r"\\d+", str(json.load(f).get("version") or "")))
+    except (OSError, ValueError, AttributeError):
+        return None
+
+
+def newest(root):
+    """root, or the newest version installed beside it when root is a plugin-cache version folder
+    (.../plugins/cache/devtime/devtime/<version>): a session started before an update still records its old root."""
+    parent = os.path.dirname(root)
+    if os.path.isdir(root) and not re.match(r"^\\d+(\\.\\d+)*$", os.path.basename(root)):
+        return root  # a checkout or another layout: used as recorded
+    if not os.path.isdir(parent):
+        parent = os.path.join(os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(os.path.expanduser("~"), ".claude"),
+                              "plugins", "cache", "devtime", "devtime")
+    best, best_v = root, (version(root) or (-1,)) if os.path.isdir(root) else (-1,)
+    try:
+        names = os.listdir(parent)
+    except OSError:
+        names = []
+    for name in names:
+        path = os.path.join(parent, name)
+        v = version(path) if re.match(r"^\\d+(\\.\\d+)*$", name) else None
+        if v and v > best_v and os.path.isfile(os.path.join(path, "devtime", "__main__.py")):
+            best, best_v = path, v
+    return best
+
 
 here = os.path.dirname(os.path.abspath(__file__))
 try:
     with open(os.path.join(here, "plugin_root.txt"), encoding="utf-8") as f:
-        root = f.read().strip()
+        root = newest(f.read().strip())
 except OSError:
     sys.exit("devtime: plugin_root.txt is missing; start a Claude Code session with the devtime plugin enabled")
 sys.path[0] = root  # not this folder: this file is called devtime.py too
 from devtime.__main__ import main  # noqa: E402
 sys.exit(main(sys.argv[1:]))
 '''
+
+
+def _cache_version(root):
+    """The version of a plugin-cache version folder (.../<version>/ holding .claude-plugin/plugin.json), else None."""
+    if not root or not re.match(r"^\d+(\.\d+)*$", os.path.basename(root.rstrip("\\/"))):
+        return None
+    try:
+        with open(os.path.join(root, ".claude-plugin", "plugin.json"), encoding="utf-8") as f:
+            return tuple(int(x) for x in re.findall(r"\d+", str(json.load(f).get("version") or ""))) or None
+    except (OSError, ValueError, AttributeError):
+        return None
 
 
 def launcher_path():
@@ -139,6 +183,15 @@ def install_launcher(root=None):
     launcher's path."""
     root = os.path.abspath(root or os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     ensure(DATA)
+    try:  # a session started before an update must not point the launcher back at its older version
+        with open(os.path.join(DATA, "plugin_root.txt"), encoding="utf-8") as f:
+            old = f.read().strip()
+        old_v, new_v = _cache_version(old), _cache_version(root)
+        if old != root and old_v and new_v and old_v > new_v and \
+                os.path.isfile(os.path.join(old, "devtime", "__main__.py")):
+            root = old
+    except OSError:
+        pass
     for name, text in (("plugin_root.txt", root + "\n"), ("devtime.py", LAUNCHER)):
         path = os.path.join(DATA, name)
         try:

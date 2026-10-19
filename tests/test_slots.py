@@ -247,7 +247,7 @@ class Liveness(SlotsBase):
         grand = "import os,time; open(%r,'w').write(str(os.getpid())); time.sleep(30)" % gpid
         code = "import subprocess,sys,time\nsubprocess.Popen([sys.executable,'-c',%r])\ntime.sleep(30)" % grand
         t0 = time.time()
-        p = self.start("test", code, "--max-hold", "0.01")
+        p = self.start("test", code, "--max-hold", "0.05")  # 3 s: the grandchild must start first, even under load
         self.assertEqual(p.wait(15), slots.EXIT_TIMEOUT)
         self.assertLess(time.time() - t0, 20)
         until(lambda: read(gpid), what="grandchild pid")

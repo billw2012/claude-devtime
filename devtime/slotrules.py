@@ -23,13 +23,20 @@ from . import paths
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SHIPPED = os.path.join(ROOT, "config", "slots.toml")
-DEFAULT_SETTINGS = {"dir": "", "max_hold": 45, "poll_s": 1.0, "log_kb": 512, "alert_wait_min": 20, "default_limit": 1}
+DEFAULT_SETTINGS = {"dir": "", "max_hold": 45, "poll_s": 1.0, "log_kb": 512, "alert_wait_min": 20, "default_limit": 1,
+                    "learn": True, "learn_max": 100, "watch_s": 5,
+                    "quiet_pattern": r"(?i)(?<![a-z])slow(?![a-z])|perf|timing|benchmark|measure"}
 DEFAULT_RESOURCES = {"gpu": 2, "test": 3, "build": 2}
 DEFAULT_GROUPS = {"quiet": ["test", "gpu"]}
 
 
 def user_file():
     return os.path.join(paths.USER_CONFIG, "slots.toml")
+
+
+def learned_file():
+    """Rules the slot watcher learned (devtime/slotwatch.py): machine-wide, never the user's slots.toml."""
+    return os.path.join(paths.USER_CONFIG, "slots_learned.toml")
 
 
 def enabled(command=""):
@@ -51,6 +58,15 @@ class Rule:
         self.tool = re.compile(spec["tool"]) if spec.get("tool") else None
         self.cwd = re.compile(spec["cwd"], re.IGNORECASE) if spec.get("cwd") else None
         self.project = spec.get("project")
+        self.learned = bool(spec.get("learned"))
+        # quiet_if: a regex; a matching command whose text (program and arguments) also matches it needs "quiet"
+        # instead (e.g. the same gpu script running a timing measurement)
+        self.quiet_if = re.compile(str(spec["quiet_if"]), re.IGNORECASE) if spec.get("quiet_if") else None
+
+    def resource_for(self, text):
+        if self.quiet_if and self.resource.lower() != "none" and self.quiet_if.search(text or ""):
+            return "quiet"
+        return self.resource
 
     def applies(self, tool, cwd):
         if self.tool and not self.tool.search(tool or ""):
@@ -89,9 +105,15 @@ def _resources(table):
 class Config:
     """The merged slot configuration."""
 
-    def __init__(self, shipped=SHIPPED, user=None):
+    def __init__(self, shipped=SHIPPED, user=None, learned=None):
         user = user_file() if user is None else user
+        learned = learned_file() if learned is None else learned
+        self.learned_path = learned
         base, mine = _toml(shipped), _toml(user) if user else {}
+        try:
+            taught = _toml(learned) if learned else {}
+        except ValueError:  # a damaged learned file costs the learned rules, never the config
+            taught = {}
         self.settings = {**DEFAULT_SETTINGS, **(base.get("settings") or {}), **(mine.get("settings") or {})}
         res = _resources(DEFAULT_RESOURCES)
         for layer in (base, mine):
@@ -99,13 +121,25 @@ class Config:
                 res[name] = dict(res.get(name, {}), **{k: v for k, v in spec.items() if v is not None})
         self.resources = res
         self.groups = {**DEFAULT_GROUPS, **(base.get("groups") or {}), **(mine.get("groups") or {})}
-        self.rules = []
-        for layer, source in ((mine, user), (base, shipped)):
+        self.rules = []  # user rules first (they win), then learned ones, then the shipped defaults
+        for layer, source in ((mine, user), (taught, learned), (base, shipped)):
             for spec in layer.get("rule") or []:
                 try:
-                    self.rules.append(Rule(spec, source))
-                except (re.error, TypeError, KeyError):
+                    rule = Rule(spec, source)
+                except (re.error, TypeError, KeyError, AttributeError):
                     continue  # a broken rule is skipped, never the whole config
+                if (source == learned) != rule.learned:
+                    rule.learned = source == learned  # only the learned file holds learned rules
+                self.rules.append(rule)
+        self.watch = []  # [[watch]]: heavy programs the watcher learns launchers for (user entries first)
+        for layer in (mine, base):
+            for spec in layer.get("watch") or []:
+                try:
+                    self.watch.append({"name": re.compile(str(spec["name"]), re.IGNORECASE),
+                                       "args": re.compile(str(spec["args"]), re.IGNORECASE) if spec.get("args") else None,
+                                       "resource": str(spec.get("resource") or "test")})
+                except (re.error, TypeError, KeyError):
+                    continue
 
     def limit(self, name):
         spec = self.resources.get(name)
@@ -148,13 +182,39 @@ WRAPPERS = {"if", "then", "else", "elif", "do", "while", "until", "!", "time", "
 INTERPRETERS = {"bash", "sh", "zsh", "dash", "python", "python3", "py", "pwsh", "powershell", "node", "perl", "ruby",
                 "wsl", "cmd"}
 INLINE = {"-c", "-command", "/c", "/k", "eval", "invoke-expression", "iex"}
+# options whose value is the next word (so the value is not taken for the script), per interpreter (lower case)
+_PS_VALUES = {"-executionpolicy", "-ep", "-ex", "-exec", "-windowstyle", "-w", "-win", "-version", "-v",
+              "-configurationname", "-config", "-inputformat", "-if", "-inp", "-outputformat", "-of", "-o",
+              "-workingdirectory", "-wd", "-psconsolefile", "-settingsfile", "-settings", "-custompipename",
+              "-encodedarguments", "-ea"}
+_PY_VALUES = {"-x", "-w", "-q"}
+OPTION_VALUES = {"powershell": _PS_VALUES, "pwsh": _PS_VALUES, "bash": {"-o", "+o", "--rcfile", "--init-file"},
+                 "sh": {"-o", "+o"}, "zsh": {"-o", "+o"}, "dash": {"-o", "+o"}, "python": _PY_VALUES,
+                 "python3": _PY_VALUES, "py": _PY_VALUES, "node": {"-r", "--require", "--import", "--loader"},
+                 "perl": {"-i", "-m"}, "ruby": {"-r", "-i"}}
+CODE_INLINE = {"python": {"-c"}, "python3": {"-c"}, "py": {"-c"}, "node": {"-e", "--eval", "-p", "--print"},
+               "perl": {"-e", "-E"}, "ruby": {"-e"}}
+SCRIPT_NEXT = {"powershell": {"-file", "-f"}, "pwsh": {"-file", "-f"}}
+ENCODED = {"-encodedcommand", "-enc", "-e", "-ec", "-en", "-encoded"}
+
+
+def decode_ps(text):
+    """The command of powershell -EncodedCommand (base64 of UTF-16LE), or '' if it doesn't decode."""
+    import base64
+    try:
+        return base64.b64decode(text + "=" * (-len(text) % 4)).decode("utf-16-le")
+    except (ValueError, UnicodeDecodeError):
+        return ""
 ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 VARREF = re.compile(r"^\$(?:env:)?\{?([A-Za-z_][A-Za-z0-9_]*)\}?", re.IGNORECASE)
 
 
+HEREDOC = re.compile(r"""<<(-?)\s*(['"]?)([A-Za-z_][A-Za-z0-9_.\-]*)\2""")  # not $((1 << 2))
+
+
 def _segments(text, ps):
     """[(start, end, separator after)] of the simple commands, split at unquoted separators."""
-    out, start, i, n, q = [], 0, 0, len(text), None
+    out, start, i, n, q, heredocs = [], 0, 0, len(text), None, []
     while i < n:
         c = text[i]
         if q:
@@ -178,6 +238,25 @@ def _segments(text, ps):
         if c == "$" and text.startswith("${", i):
             j = text.find("}", i)
             i = n if j < 0 else j + 1
+            continue
+        if not ps and text.startswith("<<", i) and not text.startswith("<<<", i):
+            m = HEREDOC.match(text, i)
+            if m:
+                heredocs.append((m.group(1) == "-", m.group(3)))
+                i = m.end()
+                continue
+        if c == "\n" and heredocs:  # here-document bodies are data, not commands: skip to their end lines
+            out.append((start, i, "\n"))
+            j = i + 1
+            for dash, word in heredocs:
+                while j < n:
+                    k = text.find("\n", j)
+                    line = text[j:n if k < 0 else k]
+                    j = n if k < 0 else k + 1
+                    if (line.lstrip("\t") if dash else line).rstrip("\r") == word:
+                        break
+            heredocs = []
+            i = start = j
             continue
         sep = None
         if text.startswith(("&&", "||"), i):
@@ -283,15 +362,29 @@ def programs(text, ps=False, depth=0):
         interp = _base(words[k][2])
         if interp in INTERPRETERS:
             j = k + 1
-            while j < len(words) and (words[j][2].startswith("-") or re.match(r"^/\w$", words[j][2])):
-                if words[j][2].lower() in INLINE:  # bash -c "...", pwsh -Command "...", cmd /c ...: a command line
+            takes = OPTION_VALUES.get(interp, ())
+            while j < len(words) and (words[j][2].startswith(("-", "+")) or re.match(r"^/\w$", words[j][2])):
+                opt = words[j][2].lower()
+                if interp in CODE_INLINE and opt in CODE_INLINE[interp]:
+                    j = len(words)  # python -c / node -e ...: program code, not a command line, and no script
+                    break
+                if opt in INLINE and interp not in CODE_INLINE:
+                    # bash -c "...", pwsh -Command "...", cmd /c ...: a command line
                     inner = " ".join(w[2] for w in words[j + 1:]) if interp == "cmd" else \
                         (words[j + 1][2] if j + 1 < len(words) else "")
                     if depth < 3:
                         out.extend(programs(inner, interp in ("pwsh", "powershell"), depth + 1))
                     j = len(words)
                     break
-                j += 1
+                if interp in ("pwsh", "powershell") and opt in ENCODED and j + 1 < len(words):
+                    if depth < 3:
+                        out.extend(programs(decode_ps(words[j + 1][2]), True, depth + 1))
+                    j = len(words)
+                    break
+                if opt in SCRIPT_NEXT.get(interp, ()):  # pwsh -File x.ps1: the next word is the script
+                    j += 1
+                    break
+                j += 2 if opt in takes else 1  # -ExecutionPolicy Bypass, bash -o pipefail, python -X utf8 ...
             if j < len(words):
                 idx.append(j)
         for j in idx:
@@ -319,7 +412,7 @@ def match(command, tool, cwd, config):
             if not any(m.start() < plen for m in rule.rx.finditer(text)):
                 continue
             if rule.resource.lower() != "none":
-                for r in rule.resource.split("+"):
+                for r in rule.resource_for(text).split("+"):
                     if r and r not in found:
                         found.append(r)
                 exclusive = exclusive or rule.exclusive
@@ -400,13 +493,39 @@ def rewrite(tool, inp, need, launcher, python=None):
 
 
 _CONFIG = None
+_STAMP = None
+
+
+def _stamp():
+    out = []
+    for path in (SHIPPED, user_file(), learned_file()):
+        try:
+            st = os.stat(path)
+            out.append((path, st.st_mtime_ns, st.st_size))
+        except OSError:
+            out.append((path, None, None))
+    return tuple(out)
 
 
 def config():
-    global _CONFIG
-    if _CONFIG is None:
-        _CONFIG = Config()
+    """The merged configuration, re-read when one of its files changed (three stat calls: cheap enough per call, so
+    a newly learned or added rule counts from the next command on, in long-lived processes too)."""
+    global _CONFIG, _STAMP
+    stamp = _stamp()
+    if _CONFIG is None or stamp != _STAMP:
+        _CONFIG, _STAMP = Config(), stamp
     return _CONFIG
+
+
+def first_rule(command, tool, cwd, cfg, ps=None):
+    """The first rule (resource "none" included) that matches a program of the command, or None."""
+    ps = tool == "PowerShell" if ps is None else ps
+    rules = [r for r in cfg.rules if r.applies(tool, cwd)]
+    for text, plen, _sep, _async in programs(command or "", ps):
+        for rule in rules:
+            if any(m.start() < plen for m in rule.rx.finditer(text)):
+                return rule
+    return None
 
 
 def hook_check(tool, inp, cwd, launcher=None, cfg=None, subagent=True):

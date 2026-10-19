@@ -183,6 +183,10 @@ finds `python3` / `python`.
   `~/.claude/settings.json` yourself): after a call that ran or waited on an Unreal run of a
   project with `[unreal] log_globs`, tells the agent what that run wasted and how to fix it.
 - `hooks/ensure_server.py` also writes `~/.claude/devtime/plugin_root.txt` and the launcher `devtime.py` (see `/devtime:ab`).
+  A session started before an update never writes its older version back (when both are plugin-cache version folders),
+  and the launcher itself runs the newest version installed beside the recorded one
+  (`~/.claude/plugins/cache/devtime/devtime/<version>`, by `plugin.json` version), so commands from old sessions run
+  current code. A recorded checkout (not a version folder) is used as it is.
 - `hooks/agent_budget.py` (PreToolUse `*` + PostToolUse Bash|PowerShell|TaskOutput|Monitor): subagents only (hook
   input carries `agent_id` only there). Denies sleeps, poll loops and blocking waits that may run over 4 min (a
   subagent's prompt cache lives 5 min, so waking up re-writes the whole context), lets a plain long job (a build)
@@ -206,7 +210,8 @@ add rules.
     python ~/.claude/devtime/devtime.py slot rules [--project P]     # rules in force (user ones first)
     python ~/.claude/devtime/devtime.py slot test "COMMAND" [--tool Bash|PowerShell]   # what a command would queue for
     python ~/.claude/devtime/devtime.py slot add-rule --project P --match RE --resource R [--cwd RE] [--exclusive] [--max-hold MIN]
-    python ~/.claude/devtime/devtime.py slot remove-rules --project P
+    python ~/.claude/devtime/devtime.py slot remove-rules --project P | --learned [--project P]
+    python ~/.claude/devtime/devtime.py slot watch [--once] [--dry-run]  # the rule-learning watcher (the server runs it)
 
 (`python -m devtime slot ...` from a checkout is the same; the launcher runs in the caller's folder.) `RES` is a
 resource, several joined with `+` (all taken together), or a group. `--shell bash|powershell` runs a shell command line
@@ -221,11 +226,55 @@ by key, your `[[rule]]`s are checked before the shipped ones.
 - `[groups]`: `quiet = ["test", "gpu"]`: requesting a group takes every slot of each of its resources.
 - `[settings]`: `dir` (lock directory; default `%LOCALAPPDATA%/devtime-slots` on Windows, `~/.claude/devtime/slots`
   elsewhere; env `DEVTIME_SLOTS_DIR` wins), `max_hold` (45 min), `poll_s` (1 s), `log_kb` (512), `alert_wait_min`
-  (20), `default_limit`.
+  (20), `default_limit`, `learn` (true), `learn_max` (100), `watch_s` (5 s), `quiet_pattern` (see "Learned rules").
 - `[[rule]]`: `match` (case-insensitive regex), `resource` (a resource, `a+b`, a group, or `none` to exempt), optional
   `exclusive`, `max_hold`, `tool` (regex on Bash / PowerShell), `cwd` (regex on the session's folder, `d:/...` form),
   `project` (a tag; `add-rule` writes its rules between `# >>> devtime-slots project=P` / `# <<< devtime-slots`
-  markers so `remove-rules` can take them out again).
+  markers so `remove-rules` can take them out again), `quiet_if` (regex: a matching command whose own text, program
+  and arguments, also matches it needs `quiet` instead, e.g. the same GPU script running a timing measurement).
+  Interpreter options that take a value are skipped when looking for the script (`powershell -NoProfile
+  -ExecutionPolicy Bypass -File Tools\Dev\build.ps1`, `bash -o pipefail x.sh`, `python -X utf8 x.py`); `python -c` /
+  `node -e` code and here-document bodies (`<<EOF ... EOF`) are not read as commands. Pass `add-rule --match` in single quotes: in double quotes bash halves
+  backslashes before devtime sees them (the regex is stored exactly as received, as a TOML literal string).
+- `[[watch]]`: `name` (regex on an executable's file name), optional `args` (regex its command line must contain),
+  `resource`: the heavy programs the watcher learns rules for (below).
+
+**Learned rules** (`devtime/slotwatch.py`): nobody has to write rules for a project's own scripts. The devtime server
+runs a watcher thread; one per machine (an OS lock on `<slot dir>/watcher.lock`; another org's server skips it and
+retries every minute). Every `watch_s` (5) seconds it lists processes (Windows: one
+`NtQuerySystemInformation(SystemProcessInformation)` call, pid / parent / image name / creation time, about 11 ms CPU
+for 450 processes, Toolhelp as fallback; Linux `/proc`; elsewhere `ps`). Only when a `[[watch]]` program appears
+(shipped: UnrealEditor(-Cmd) -> test, `blender -b` -> gpu, UnrealBuildTool / AutomationTool -> build) does it read
+command lines (`NtQueryInformationProcess` ProcessCommandLineInformation) of it and its ancestors, and the working
+folder of the shell (from the process parameters in its PEB). It then:
+- skips it under a `slot run` wrapper (queued already), under another watched program (the editor's own UBT), with
+  `DEVTIME_SLOTS=0` in the shell's command, or when no Claude Code shell (bash / sh / pwsh / powershell / cmd whose
+  parent is claude / node / bun) is an ancestor and the chain does not end in an orphaned shell (a tool shell that
+  timed out while its job went on); a run started by hand from a terminal is never learned from;
+- takes the outermost project script between that shell and the heavy process (an interpreter's script argument, a
+  `.bat` / `.sh` run directly); for scripts run inside the shell's process (`& ./x.ps1`, `source x.sh`) the one script
+  the shell's command names (`-EncodedCommand` is decoded). An inline loop, `git`, `make`, a temp / scratchpad script
+  outside any project, or two candidate scripts are "unlearnable": logged (`unlearnable` event, with the chain of
+  process names and the reason, at most hourly per chain), nothing learned;
+- writes a rule matching the script's path inside its git work tree, `(^|[\/ '"])Tools[\/]Dev[\/]capture_crowd\.sh`
+  (not followed by a word character, `.` or `-`), with the watch entry's resource, `project` (the git root's name of
+  the shell's folder; a linked worktree counts as its main repository), `learned = true`, `script`, `heavy`,
+  `example`, `first_seen` / `last_seen` / `seen` and `quiet_if = quiet_pattern` into
+  `~/.claude/devtime/config/slots_learned.toml` (never your slots.toml). A script whose path matches `quiet_pattern`
+  (default `(?i)(?<![a-z])slow(?![a-z])|perf|timing|benchmark|measure`), or whose heavy program's command line does
+  while its own arguments don't, is learned as `quiet`. A script at a project's root also gets a `cwd` condition on
+  the project's name. Logged as `learned`.
+- does nothing when a rule in force already covers the script: rules are checked user first, then learned, then
+  shipped, so your rules always win (`resource = "none"` exempts a script). A learned rule that covers it only gets
+  `last_seen`, `seen` and the new resource (`test+gpu`) updated. At most `learn_max` (100) rules are kept, the least
+  recently seen go first. `learn = false` turns learning off.
+- `slot rules [--learned]` lists them (`[learned seen Nx, last ...]`), `slot remove-rules --learned [--project P]`
+  removes them, `slot watch --once [--dry-run]` runs one check in the foreground and prints what it finds.
+The hook and the server re-read the rule files when one changes (three `stat` calls per hook call), so a learned rule
+counts from the next command on. Only process names, script paths and the project name are stored or logged, never
+command arguments. Limits: a heavy program that starts and ends between two checks is missed; one started detached
+from a shell that exited is seen as an orphan only if its own parent is a shell; a script invoked by a different path
+(`cd Tools/Dev && ./x.sh`) is not matched by the learned path.
 
 **Rules match programs, not text.** A command line is split into simple commands (at `;` `&&` `||` `|` `&`,
 newlines, brackets, `$(`), and a rule counts only if its match starts inside the program a command runs: the first
@@ -278,11 +327,12 @@ used (permissions, a sandbox), `slot run` says so and runs the command unqueued 
 `pid, waited_s, held_s, exit`; rotated past `log_kb` (one old file kept).
 
 **Dashboard**: `/api/slots?hours=12` (limits, holders, queue, minutes waited and held per resource per hour, recent
-events; another organisation's tickets are shown without label, folder or session). The overview's "Queue waits" card
-shows it, and a "queue wait" usage alert goes to the session of a ticket (of this org) waiting over `alert_wait_min`.
+events, `learned`: the learned rules, newest first; another organisation's tickets are shown without label, folder
+or session). The overview's "Queue waits" card shows it (with a short list of learned rules), and a "queue wait" usage alert goes to the session of a ticket (of this org) waiting over `alert_wait_min`.
 
 Known limits: only commands the hook sees are queued; a job started inside a script that no rule matches (or by a
-tool other than Bash / PowerShell) is not. Make the script call `slot run` itself or add a rule for the script.
+tool other than Bash / PowerShell) is not, until the watcher has seen it once and learned a rule for the script (its
+first run goes unqueued). For what learning can't see, make the script call `slot run` itself or add a rule.
 
 ## Monitoring cost
 

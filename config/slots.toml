@@ -14,6 +14,13 @@ poll_s = 1.0             # seconds between a waiter's queue checks
 log_kb = 512             # the log (<dir>/log.jsonl) is rotated past this size, one old file kept
 alert_wait_min = 20      # the dashboard alerts a session when one of its tickets has waited this long
 default_limit = 1        # slots of a resource that is not listed under [resources]
+learn = true             # the slot watcher (in the devtime server) learns rules for the scripts that start the heavy
+#                        # programs listed under [[watch]] (into <data dir>/config/slots_learned.toml); false = off
+learn_max = 100          # learned rules kept (the least recently seen go first)
+watch_s = 5              # seconds between the watcher's process-list checks
+# timing runs need "quiet" (the machine to itself): a learned script whose path matches this is learned as quiet, and
+# every learned rule gets it as quiet_if, so a run whose command line matches (gpu_run.sh measure_x.py) is queued quiet
+quiet_pattern = '''(?i)(?<![a-z])slow(?![a-z])|perf|timing|benchmark|measure'''
 
 [resources]              # name = number of jobs that may hold it at once, or { limit = N, max_hold = MIN }
 gpu = 2
@@ -26,7 +33,8 @@ quiet = ["test", "gpu"]  # e.g. timing-sensitive captures or perf tests: nothing
 
 # Rules: a command whose program (or interpreter script) matches `match` is queued for `resource` by the hook
 # (match: case-insensitive regular expression; optional: exclusive = true, max_hold = MIN, tool = "Bash|PowerShell",
-# cwd = "regex on the session's folder", project = "tag"). resource = "none" exempts what it matches.
+# cwd = "regex on the session's folder", project = "tag", quiet_if = "regex": a matching command that also matches it
+# needs "quiet" instead). resource = "none" exempts what it matches.
 
 [[rule]]                 # headless editor runs, automation tests, commandlets
 match = '''UnrealEditor(-Cmd)?(\.exe)?\b'''
@@ -39,6 +47,22 @@ resource = "build"
 [[rule]]                 # background Blender renders / scripts
 match = '''blender(\.exe)?['"]?\s(.*\s)?(-b|--background)\b'''
 resource = "gpu"
+
+# Watch list: heavy programs the slot watcher looks for. When one starts unqueued under a Claude Code shell, the
+# watcher finds the project script that started it and learns a rule for that script with this resource
+# (name: regex on the executable's file name; args: optional regex its command line must contain).
+[[watch]]
+name = '''^UnrealEditor(-Cmd)?(\.exe)?$'''
+resource = "test"
+
+[[watch]]
+name = '''^blender(\.exe)?$'''
+args = '''\s(-b|--background)\b'''
+resource = "gpu"
+
+[[watch]]
+name = '''^(UnrealBuildTool|AutomationTool)(\.exe)?$'''
+resource = "build"
 
 # Project rules (written by /devtime:slots into the user file), e.g.:
 # [[rule]]

@@ -1,6 +1,6 @@
 ---
 name: slots
-description: Adopt the machine-wide slot queue (devtime slots) in the current project - find the scripts that start heavy jobs (editor or headless test runs, GPU captures, renders, builds, long test suites), write rules so they queue FIFO with every other session on this PC, and retire hand-rolled locks. Also explains `slot status`. Use when the user runs /devtime:slots, asks how sessions should share the GPU / editor / builds, or asks what is queued or holding a slot.
+description: Review and adjust the machine-wide slot queue (devtime slots) for the current project - rules for its scripts are learned automatically; this optionally reviews the learned ones, adds rules learning can't see (jobs that start no watched program, long test suites), and retires hand-rolled locks. Also explains `slot status`. Use when the user runs /devtime:slots, asks how sessions should share the GPU / editor / builds, or asks what is queued or holding a slot.
 ---
 
 # devtime slots
@@ -16,15 +16,23 @@ shared by every session, project and organisation on the PC. The plugin's hook r
 matches a rule into `slot run <resource> -- <command>`: it waits its turn, runs, and frees the slot when it exits,
 however it exits (locks held by the live process; on Windows the job dies with its wrapper). Rules live in
 `~/.claude/devtime/config/slots.toml` (machine-wide); the shipped defaults cover UnrealEditor(-Cmd), Build.bat /
-RunUAT / ue-parallel-build and background Blender.
+RunUAT / ue-parallel-build and background Blender. Rules for a project's own scripts are **learned automatically**:
+the devtime server's watcher sees a heavy program (UnrealEditor, `blender -b`, UBT) started unqueued by a Claude Code
+shell, finds the project script that started it and writes a learned rule (`~/.claude/devtime/config/
+slots_learned.toml`; the job's first run goes unqueued; timing runs - perf / measure / benchmark ... in the script
+name or its arguments - are queued `quiet`). Nobody has to run this skill; it is for reviewing and adjusting.
 
 ## Args `status`: explain the queue
 Run `slot status`: one line per resource, `used/limit`, `held:` tickets (`#id 'label' (project) for`) and `queue:`
 (oldest first, `excl` = wants every slot). `slot log --since 2h` shows recent acquire / release / timeout / kill.
 A stuck holder (crashed tool, forgotten run): `slot kill <id>` (it ends within seconds). Then stop.
 
-## Otherwise: adopt in this project
-1. `slot rules` (rules in force) and `slot status`.
+## Otherwise: review this project
+1. `slot rules` (rules in force; `[learned ...]` ones were learned, with how often they were seen) and `slot status`.
+   `slot log --since 7d` shows `learned` and `unlearnable` events (unlearnable: the chain of process names, e.g. an
+   inline loop or `make` that starts the editor; those need a hand rule or a script).
+   A wrong learned rule: add a user rule for the same script (user rules win; `resource = "none"` exempts it) or
+   `slot remove-rules --learned --project P`. Learning off: `learn = false` under `[settings]`.
 2. Find what launches heavy jobs in this project, quickly (Grep / Glob, no deep reading): scripts under Tools/,
    scripts/, bin/, Makefile / package.json / pyproject targets, *.sh / *.ps1 / *.bat / *.py that start an editor or
    game binary (UnrealEditor, Unity, Godot, blender -b), GPU captures or renders, headless or automation test runs,
@@ -33,12 +41,12 @@ A stuck holder (crashed tool, forgotten run): `slot kill <id>` (it ends within s
 3. For each candidate, decide the resource (`gpu` for captures / renders, `test` for editor or headless test runs,
    `build` for builds; `quiet` only when it must have the machine to itself, e.g. timings) and a regex for how a
    session invokes it (the script's path or name, e.g. `Tools/Dev/capture_.*\.sh`). Check each with
-   `slot test "<a typical command line>"` (prints the matched resources, or null). Skip what a default rule already
-   covers.
+   `slot test "<a typical command line>"` (prints the matched resources, or null). Skip what a default or learned rule
+   already covers, and scripts that start a watched program (they are learned on their first run).
 4. Ask the user with ONE AskUserQuestion, `multiSelect: true`, one option per proposed rule (label: the script, its
    resource; description: the regex and why). Do not add "None" or "All" options (the widget has its own way out).
-5. For each chosen rule: `slot add-rule --project "<project name>" --match "<regex>" --resource <res>` (add
-   `--cwd "<regex of this project's folder>"` if the pattern is generic enough to hit other projects; `--max-hold MIN`
+5. For each chosen rule: `slot add-rule --project "<project name>" --match '<regex>' --resource <res>` (the regex
+   in single quotes: in double quotes bash halves its backslashes; add `--cwd '<regex of this project's folder>'` if the pattern is generic enough to hit other projects; `--max-hold MIN`
    for jobs that legitimately run past 45 min). Rules are tagged with the project: `slot rules --project X` lists
    them, `slot remove-rules --project X` removes them.
 6. If the project has hand-rolled locks or wait loops that the new rules now cover, tell the session (and propose

@@ -175,8 +175,14 @@ function renderAlerts() {
 function renderSlots(q) {
   const card = $("#slots-card");
   const waited = Object.values(q && q.waits || {}).some((v) => v.some((x) => x > 0));
-  card.hidden = !q || (!q.holders.length && !q.queue.length && !waited);
+  const learned = (q && q.learned) || [];
+  card.hidden = !q || (!q.holders.length && !q.queue.length && !waited && !learned.length);
   if (card.hidden) return;
+  $("#slots-learned").replaceChildren(...(learned.length ? [el("div", { class: "sub" },
+    `Learned rules (${learned.length}): `, ...learned.slice(0, 8).flatMap((r, i) => [i ? " · " : "",
+      el("span", { title: `${r.heavy || "a heavy program"} seen under it ${r.seen || 1}x, first ${r.first_seen || "?"}, last ${r.last_seen || "?"}` },
+        `${r.script} → ${r.resource}${r.project ? ` (${r.project})` : ""}`)]),
+    learned.length > 8 ? ` · +${learned.length - 8} more (slot rules --learned)` : "")] : []));
   const now = q.now;
   const who = (t) => `#${t.id} ${t.label || "job"}${t.project ? ` (${t.project})` : ""}`;
   const c = q.counts || {};

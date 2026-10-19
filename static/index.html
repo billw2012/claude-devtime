@@ -47,6 +47,14 @@
     <div id="live-list" class="table-wrap"></div>
   </article>
 
+  <article class="card" id="slots-card" hidden>
+    <header><h2>Queue waits</h2><span class="sub" id="slots-sub"></span></header>
+    <p class="note">The machine-wide slot queue (<code>slot run</code>, shared by every session on this PC): who holds
+      or waits for each resource now, and minutes waited per hour.</p>
+    <div id="slots-now" class="table-wrap"></div>
+    <div id="slots-hours" class="table-wrap"></div>
+  </article>
+
   <article class="card alerts" id="alerts-card" hidden>
     <header><h2>Usage alerts</h2><span class="sub" id="alerts-sub"></span></header>
     <div id="alerts" class="table-wrap"></div>

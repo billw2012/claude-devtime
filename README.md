@@ -70,6 +70,16 @@ effect is visible, and `python -m devtime optimize remove <id>` undoes it.
 when there are too few stages to call it), `/devtime:ab stop <id>` ends it and offers to apply the winner. Arms are
 assigned by hash, not by the orchestrating session, and a hook enforces them.
 
+**`/devtime:slots`** adopts the machine-wide slot queue in a project. Several sessions on one PC (say one per project,
+running autonomously) share the GPU, headless editor / test runs and builds through one FIFO queue per resource
+(default `gpu`=2, `test`=3, `build`=2 at once; `quiet` = test+gpu exclusively). The plugin's hook queues any command
+that matches a rule in `~/.claude/devtime/config/slots.toml` by rewriting it to
+`python ~/.claude/devtime/devtime.py slot run <resource> -- <command>`. The rules ship covering UnrealEditor(-Cmd),
+Build.bat / RunUAT / ue-parallel-build and background Blender, and the skill adds rules for a project's own scripts. A
+slot frees itself however its job ends (crash, kill, closed session, reboot), and the hook refuses loops that wait for
+another process or a lock file. `slot status` shows who holds what and who waits; the dashboard shows queue waits and
+alerts a session whose ticket waits over 20 min. `DEVTIME_SLOTS=0` turns the wrapping off.
+
 ## Data and configuration
 
 Runtime data (caches, alerts, plan readings, server log) lives in `~/.claude/devtime/`; your settings and project

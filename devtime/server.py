@@ -144,6 +144,10 @@ def make_handler(store):
                 return self.json(overview_for((query.get("project") or ["*"])[0], (query.get("range") or ["24h"])[0]))
             if url.path == "/api/alerts":
                 return self.json({"alerts": store.alerts.list()})
+            if url.path == "/api/slots":
+                from . import slots
+                hours = min(168.0, float((query.get("hours") or ["24"])[0]))
+                return self.json(slots.summary(time.time(), hours, paths.ORG))
             if url.path == "/api/watch":
                 from . import overview
                 data = store.slice("*")

@@ -17,3 +17,4 @@ os.environ["CLAUDE_CONFIG_DIR"] = os.path.join(HOME, ".claude")
 os.environ["DEVTIME_DESKTOP_DIR"] = os.path.join(HOME, "Claude")
 os.environ["CLAUDE_CODE_ORGANIZATION_UUID"] = ORG
 os.environ["DEVTIME_NO_SERVER_START"] = "1"
+os.environ["DEVTIME_SLOTS_DIR"] = os.path.join(HOME, "slots")  # never the machine's real slot queue

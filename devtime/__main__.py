@@ -31,6 +31,9 @@
     python -m devtime review-context [--hours 2]         summary + review log tail for the usage reviewer (devtime/tick.py)
     python -m devtime review-done --text "..."          record a finished review
     python -m devtime org                                the current organisation, its instance folder and port
+    python -m devtime slot run RES [--exclusive] [--max-hold MIN] [--label T] -- CMD ... | status | kill N | log
+                                                         machine-wide FIFO queue for heavy jobs (devtime/slots.py),
+                                                         shared by every session, project and org on the PC
 
 Each organisation on the PC has its own devtime (devtime/paths.py): every command works on the instance of the org it
 runs in (env CLAUDE_CODE_ORGANIZATION_UUID, else ~/.claude.json's login). If that org can't be determined, commands
@@ -44,13 +47,18 @@ import sys
 import time
 
 from . import paths
-from .store import Store
+
+Store = None  # devtime.store.Store, imported by run()
 
 NO_ORG_OK = {"org", "mark", "setup:claude-md", "ab:new", "ab:arm", "ab:stop", "ab:list", "optimize:list",
              "optimize:apply", "optimize:remove", "optimize:adopt", None}
 
 
 def main(argv=None):
+    argv = sys.argv[1:] if argv is None else list(argv)
+    if argv[:1] == ["slot"]:  # machine-wide, no org needed (devtime/slots.py)
+        from . import slots
+        return slots.main(argv[1:])
     return run(argv)
 
 
@@ -68,6 +76,9 @@ def org_cmd():
 
 
 def run(argv=None):
+    global Store
+    if Store is None:
+        from .store import Store  # heavy (scan, analyze ...): not imported for `slot`
     parser = argparse.ArgumentParser(prog="devtime", description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="cmd")

@@ -1,0 +1,47 @@
+# devtime slots: one machine-wide FIFO queue for heavy jobs (GPU work, headless editor / test runs, builds) shared by
+# every Claude Code session on this PC, whatever its project or organisation. Reference: docs/reference.md "Slots".
+#
+# These are the shipped defaults. Change or extend them in <data dir>/config/slots.toml (~/.claude/devtime/config/
+# slots.toml), never here: tables merge key by key and your [[rule]]s are checked before these. `/devtime:slots` writes
+# project rules there for you; `python ~/.claude/devtime/devtime.py slot rules` lists what is in force.
+
+[settings]
+# dir = ""               # lock directory every session, project and org shares (on purpose: the machine is shared);
+#                        # default %LOCALAPPDATA%/devtime-slots on Windows, ~/.claude/devtime/slots elsewhere;
+#                        # env DEVTIME_SLOTS_DIR overrides it
+max_hold = 45            # minutes a job may hold its slots; past that its whole process tree is killed (0 = no limit)
+poll_s = 1.0             # seconds between a waiter's queue checks
+log_kb = 512             # the log (<dir>/log.jsonl) is rotated past this size, one old file kept
+alert_wait_min = 20      # the dashboard alerts a session when one of its tickets has waited this long
+default_limit = 1        # slots of a resource that is not listed under [resources]
+
+[resources]              # name = number of jobs that may hold it at once, or { limit = N, max_hold = MIN }
+gpu = 2
+test = 3
+build = 2
+# test = { limit = 3, max_hold = 90 }
+
+[groups]                 # a group is exclusive over all its resources: it waits until every slot is free
+quiet = ["test", "gpu"]  # e.g. timing-sensitive captures or perf tests: nothing else on the GPU meanwhile
+
+# Rules: a command whose program (or interpreter script) matches `match` is queued for `resource` by the hook
+# (match: case-insensitive regular expression; optional: exclusive = true, max_hold = MIN, tool = "Bash|PowerShell",
+# cwd = "regex on the session's folder", project = "tag"). resource = "none" exempts what it matches.
+
+[[rule]]                 # headless editor runs, automation tests, commandlets
+match = '''UnrealEditor(-Cmd)?(\.exe)?\b'''
+resource = "test"
+
+[[rule]]                 # Unreal builds (direct or through the ue-parallel-build skill's script)
+match = '''\bBuild\.bat\b|\bRunUAT\.bat\b|ue[-_]parallel[-_]build'''
+resource = "build"
+
+[[rule]]                 # background Blender renders / scripts
+match = '''blender(\.exe)?['"]?\s(.*\s)?(-b|--background)\b'''
+resource = "gpu"
+
+# Project rules (written by /devtime:slots into the user file), e.g.:
+# [[rule]]
+# match = '''Tools/Dev/capture_.*\.sh'''
+# resource = "gpu"
+# project = "CityGen"

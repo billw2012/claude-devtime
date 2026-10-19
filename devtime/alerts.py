@@ -15,6 +15,7 @@ Defaults are set so that only unusually expensive agents trigger (all configurab
 - read-only on a big model: a non-Haiku subagent with many tool calls and no edits (not a planner or reviewer).
 - untagged coding stage: a subagent writing code without an AB:<stage> tag in a session running the model A/B.
 - polling from the main session: a big-context main session checking on running jobs again and again.
+- queue wait: a ticket of the machine-wide slot queue (devtime/slots.py) waiting longer than alert_wait_min (slots.toml).
 """
 
 import hashlib
@@ -93,6 +94,7 @@ ADVICE = {
                                 "\"reader\" agent type (Haiku, slim) from now on",
     "untagged coding stage": "tag comparable coding stages AB:<stage> and follow the arm rotation; leave only "
                              "trivial edits untagged",
+    "queue wait": "fine if the job must wait its turn; otherwise check the holder with `slot status`",
     "polling from the main session": "each check re-reads the whole context: hand the wait to a runner "
                                      "(\"Runner (haiku): ...\") that reports back when the job ends, and check less often",
 }
@@ -219,6 +221,11 @@ def check(data, config, now=None):
                     "title": f"session '{n['session']}': usage review", "text": f"has a usage review note: {n['text']}",
                     "advice": "act on it at the next natural break if it holds; the reviewer only sees numbers and "
                               "descriptions, so ignore it if it misreads the work", "since": n["t"]})
+    try:  # machine-wide slot queue (devtime/slots.py): this org's tickets that have waited too long
+        from . import slots
+        out.extend(slots.wait_alerts(now, mine))
+    except Exception:
+        pass
     if machine >= th["machine_burn"]:
         level = int(machine // th["machine_burn"])
         out.append({"key": f"machine:burn:{level}", "kind": "machine burn", "level": level,

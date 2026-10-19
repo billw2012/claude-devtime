@@ -171,6 +171,43 @@ function renderAlerts() {
   $("#alerts").replaceChildren(el("table", {}, el("thead", {}, head), el("tbody", {}, ...body)));
 }
 
+// ------------------------------------------------------------------------------------------------------- slot queue
+function renderSlots(q) {
+  const card = $("#slots-card");
+  const waited = Object.values(q && q.waits || {}).some((v) => v.some((x) => x > 0));
+  card.hidden = !q || (!q.holders.length && !q.queue.length && !waited);
+  if (card.hidden) return;
+  const now = q.now;
+  const who = (t) => `#${t.id} ${t.label || "job"}${t.project ? ` (${t.project})` : ""}`;
+  const c = q.counts || {};
+  $("#slots-sub").textContent = `${q.holders.length} holding · ${q.queue.length} waiting` +
+    (c.timeout ? ` · ${c.timeout} killed at max hold` : "") + (c.kill ? ` · ${c.kill} stopped` : "") + " (last 12 h)";
+  const names = Object.keys(q.limits);
+  const rows = names.map((n) => {
+    const hold = q.holders.filter((t) => n in t.need), wait = q.queue.filter((t) => n in t.need);
+    if (!hold.length && !wait.length) return null;
+    const used = hold.reduce((a, t) => a + (t.need[n] < 0 ? q.limits[n] : t.need[n]), 0);
+    const long = wait.some((t) => now - t.queued >= 60 * q.alertWaitMin);
+    return el("tr", {},
+      el("td", { class: "nowrap" }, n),
+      el("td", { class: "num" }, `${used}/${q.limits[n]}`),
+      el("td", { class: "label" }, hold.map((t) => `${who(t)} ${dur(now - t.acquired)}`).join(", ")),
+      el("td", { class: `label ${long ? "warn" : ""}` }, wait.map((t) => `${who(t)} ${dur(now - t.queued)}`).join(", ")));
+  }).filter(Boolean);
+  $("#slots-now").replaceChildren(rows.length ? el("table", {}, el("thead", {}, el("tr", {},
+    ...["Resource", "Used", "Held by (for)", "Waiting (for)"].map((h, i) => el("th", { class: i === 1 ? "num" : "" }, h)))),
+    el("tbody", {}, ...rows)) : el("div", { class: "sub" }, "Nothing queued or running now."));
+  const res = Object.keys(q.waits).filter((r) => q.waits[r].some((x) => x > 0));
+  const hrs = q.hours.slice(-12), off = q.hours.length - hrs.length;
+  if (!res.length) { $("#slots-hours").replaceChildren(el("div", { class: "sub" }, "No waits in the last 12 hours.")); return; }
+  const head = el("tr", {}, el("th", {}, "Minutes waited"), ...hrs.map((h) => el("th", { class: "num" }, clock(h))));
+  const body = res.map((r) => el("tr", {}, el("td", {}, r), ...hrs.map((h, i) => {
+    const v = q.waits[r][off + i] || 0;
+    return el("td", { class: "num", title: `${r}: ${v.toFixed(1)} min waited in the hour from ${clock(h)}` }, v >= 0.5 ? Math.round(v) : v > 0 ? "<1" : "");
+  })));
+  $("#slots-hours").replaceChildren(el("table", {}, el("thead", {}, head), el("tbody", {}, ...body)));
+}
+
 // ------------------------------------------------------------------------------------------------------------ trend
 function renderTrend(o) {
   const t = o.trend, n = t.main.length;
@@ -452,14 +489,15 @@ function saveHash() {
 }
 async function refresh() {
   try {
-    const [o, a] = await Promise.all([
+    const [o, a, q] = await Promise.all([
       getJSON(`/api/overview?project=${encodeURIComponent(S.project)}&range=${S.range}`),
       getJSON("/api/alerts").catch(() => ({ alerts: [] })),
+      getJSON("/api/slots?hours=12").catch(() => null),
     ]);
     S.data = o;
     S.allowance = o.limits && o.limits.allowance > 0 ? o.limits.allowance : null;
     S.alerts = (a.alerts || []).filter((x) => S.project === "*" || !x.project || x.project === S.project);
-    renderTiles(o); renderLive(o); renderAlerts(); renderTrend(o); renderLimit(o); renderThroughput(o); renderSpenders(o); renderMonitoring(o); renderExperiments(o);
+    renderTiles(o); renderLive(o); renderSlots(q); renderAlerts(); renderTrend(o); renderLimit(o); renderThroughput(o); renderSpenders(o); renderMonitoring(o); renderExperiments(o);
     $("#live").textContent = `updated ${clock(o.now)}`;
     $("#live").classList.toggle("on", o.live.length > 0);
   } catch (e) {

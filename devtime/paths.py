@@ -112,10 +112,10 @@ def cache_file(name):
 
 LAUNCHER = '''"""Stable entry point for DevTime (written by the plugin at session start; the plugin path changes on update).
 
-    python devtime.py <args>      same as `python -m devtime <args>` run from the root in plugin_root.txt
+    python devtime.py <args>      same as `python -m devtime <args>` with the plugin root in plugin_root.txt, run in
+                                  this process and in the caller's working directory (`slot run` needs both)
 """
 import os
-import subprocess
 import sys
 
 here = os.path.dirname(os.path.abspath(__file__))
@@ -124,7 +124,9 @@ try:
         root = f.read().strip()
 except OSError:
     sys.exit("devtime: plugin_root.txt is missing; start a Claude Code session with the devtime plugin enabled")
-sys.exit(subprocess.call([sys.executable, "-m", "devtime"] + sys.argv[1:], cwd=root))
+sys.path[0] = root  # not this folder: this file is called devtime.py too
+from devtime.__main__ import main  # noqa: E402
+sys.exit(main(sys.argv[1:]))
 '''
 
 

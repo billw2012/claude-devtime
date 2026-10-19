@@ -20,6 +20,12 @@ a subagent only:
 Registered by the plugin's hooks/hooks.json (PreToolUse "*", PostToolUse "Bash|PowerShell|TaskOutput|Monitor"); run
 through hooks/run.sh so the right Python is found.
 
+5. Slots (devtime/slotrules.py, every session, Bash / PowerShell): a command matching a rule of the machine-wide
+   slots.toml is rewritten (updatedInput) to run under `<launcher> slot run <resource> ...`, so it queues FIFO with
+   every other session's heavy jobs; loops that wait for another process or a lock file are denied with a pointer to
+   `slot run`. In subagents such a loop also counts as a long wait whatever its timeout. Env DEVTIME_SLOTS=0 (or
+   DEVTIME_SLOTS=0 in the command) leaves commands alone.
+
 4. A/B experiments (devtime/ab.py): an Agent / Task launch whose description starts "AB:<experiment>:<stage>" of an
    active experiment in <data dir>/config/experiments.toml must use the model and agent type of the arm the stage's
    hash gives; otherwise it is denied with the right arm. Unknown or stopped experiments pass. Runs in main sessions too.
@@ -85,6 +91,9 @@ def wait_seconds(tool, inp):
         slept += sum(float(n) / 1000 for n in START_SLEEP_MS.findall(cmd))
         slept += sum(float(n) for n in TIMEOUT_T.findall(cmd))
         deadline = max([float(n) * (60 if u.lower() == "minutes" else 1) for u, n in DEADLINE.findall(cmd)] or [0])
+        if hand_rolled_wait(cmd):  # waits as long as another job runs, whatever its timeout says
+            return (max(timeout_s, 3600), "a loop waiting for another job to finish (queue your own job with "
+                    "`slot run` instead)", False)
         looping = bool(LOOP.search(cmd)) and (slept or deadline)
         if looping:  # a poll loop runs until its timeout / deadline, not for one sleep
             secs = max(deadline, timeout_s or 120)
@@ -103,6 +112,11 @@ def wait_seconds(tool, inp):
         secs = t / 1000 if t > 3600 else t
         return secs, f"a blocking {tool} wait", False
     return 0, "", False
+
+
+def hand_rolled_wait(cmd):
+    from devtime import slotrules
+    return slotrules.hand_rolled_wait(cmd)
 
 
 def agent_transcript(transcript_path, session_id, agent_id):
@@ -287,8 +301,41 @@ def ab_check(inp):
                                    "permissionDecisionReason": reason}}
 
 
+def slot_check(data):
+    """devtime slots (devtime/slotrules.py), every session: None, ("deny", reason) or ("wrap", new input, note)."""
+    if (data.get("hook_event_name") or "PreToolUse") != "PreToolUse" or data.get("tool_name") not in ("Bash",
+                                                                                                    "PowerShell"):
+        return None
+    try:
+        from devtime import slotrules
+        result = slotrules.hook_check(data["tool_name"], data.get("tool_input") or {}, data.get("cwd"),
+                                      paths.launcher_path())
+        if result and result[0] == "wrap":
+            paths.install_launcher(ROOT)  # the stable launcher the wrapped command calls, current with this plugin
+        return result
+    except Exception:  # never let the queue break a call: leave it as it is
+        return None
+
+
 def decide(data):
     """The hook's JSON output for one event, or None to stay silent."""
+    slot = slot_check(data)
+    if slot and slot[0] == "deny":
+        return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
+                                       "permissionDecisionReason": slot[1]}}
+    out = budget(data)
+    if slot and slot[0] == "wrap":
+        if out and out["hookSpecificOutput"].get("permissionDecision") == "deny":
+            return out
+        spec = out["hookSpecificOutput"] if out else {"hookEventName": "PreToolUse"}
+        spec["updatedInput"] = slot[1]  # no permissionDecision: the normal permission checks see the wrapped command
+        spec["additionalContext"] = (spec.get("additionalContext", "") + "\n" + slot[2]).strip()
+        return {"hookSpecificOutput": spec}
+    return out
+
+
+def budget(data):
+    """The agent budget / alerts / A/B part of the hook's output, or None."""
     agent_id = data.get("agent_id")
     event = data.get("hook_event_name") or "PreToolUse"
     if event == "PreToolUse" and data.get("tool_name") in ("Agent", "Task"):

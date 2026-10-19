@@ -189,7 +189,100 @@ finds `python3` / `python`.
   through until one of the agent's calls has actually run over 4 min, then refuses further ones; the reason tells the
   agent to hand the job back to the main session and end. Past 250k tokens of context (then every 150k) it tells the
   agent to finish its step and hand off. ~0.1 s per call. Limits: `DEVTIME_AGENT_WAIT_LIMIT`, `_WAIT_BUDGET`,
-  `_CONTEXT_NUDGE`. Also (main sessions too) enforces the arms of active `/devtime:ab` experiments on Agent / Task launches.
+  `_CONTEXT_NUDGE`. Also (main sessions too) enforces the arms of active `/devtime:ab` experiments on Agent / Task launches,
+  and queues heavy commands for machine-wide slots (see "Slots" below).
+
+## Slots: a machine-wide queue for heavy jobs
+
+`devtime/slots.py` (runtime), `devtime/slotrules.py` (configuration, rules, the hook's rewrite), `/devtime:slots`
+(adopt in a project). One FIFO queue per resource, shared by every Claude Code session on the PC, whatever its
+project or organisation (on purpose: they share the machine). Nothing in the code is project-specific; projects only
+add rules.
+
+    python ~/.claude/devtime/devtime.py slot run RES[+RES...] [--exclusive] [--max-hold MIN] [--label TEXT] -- CMD ...
+    python ~/.claude/devtime/devtime.py slot status [--json]        # per resource: used/limit, holders, queue
+    python ~/.claude/devtime/devtime.py slot kill TICKET             # stop a holder (or drop a waiting ticket)
+    python ~/.claude/devtime/devtime.py slot log [--since 2h] [--json]
+    python ~/.claude/devtime/devtime.py slot rules [--project P]     # rules in force (user ones first)
+    python ~/.claude/devtime/devtime.py slot test "COMMAND" [--tool Bash|PowerShell]   # what a command would queue for
+    python ~/.claude/devtime/devtime.py slot add-rule --project P --match RE --resource R [--cwd RE] [--exclusive] [--max-hold MIN]
+    python ~/.claude/devtime/devtime.py slot remove-rules --project P
+
+(`python -m devtime slot ...` from a checkout is the same; the launcher runs in the caller's folder.) `RES` is a
+resource, several joined with `+` (all taken together), or a group. `--shell bash|powershell` runs a shell command line
+(from env `DEVTIME_SLOT_CMD`, which is how the hook passes it, or the words after `--`) in a fresh shell of that kind.
+
+**Configuration**: `<plugin>/config/slots.toml` holds the defaults (read it for every key); override or extend them in
+`~/.claude/devtime/config/slots.toml` (machine-wide, not per org): `[settings]`, `[resources]` and `[groups]` merge key
+by key, your `[[rule]]`s are checked before the shipped ones.
+
+- `[resources]`: `name = N` (jobs at once) or `name = { limit = N, max_hold = MIN }`. Defaults gpu 2, test 3, build 2;
+  an unlisted resource has `default_limit` (1) slots.
+- `[groups]`: `quiet = ["test", "gpu"]`: requesting a group takes every slot of each of its resources.
+- `[settings]`: `dir` (lock directory; default `%LOCALAPPDATA%/devtime-slots` on Windows, `~/.claude/devtime/slots`
+  elsewhere; env `DEVTIME_SLOTS_DIR` wins), `max_hold` (45 min), `poll_s` (1 s), `log_kb` (512), `alert_wait_min`
+  (20), `default_limit`.
+- `[[rule]]`: `match` (case-insensitive regex), `resource` (a resource, `a+b`, a group, or `none` to exempt), optional
+  `exclusive`, `max_hold`, `tool` (regex on Bash / PowerShell), `cwd` (regex on the session's folder, `d:/...` form),
+  `project` (a tag; `add-rule` writes its rules between `# >>> devtime-slots project=P` / `# <<< devtime-slots`
+  markers so `remove-rules` can take them out again).
+
+**Rules match programs, not text.** A command line is split into simple commands (at `;` `&&` `||` `|` `&`,
+newlines, brackets, `$(`), and a rule counts only if its match starts inside the program a command runs: the first
+word after `VAR=x` assignments and wrappers (`env`, `nohup`, `timeout N`, `cmd /c`, `Start-Process`, `uv run`, ...),
+or for an interpreter (`bash`, `sh`, `python`, `pwsh`, `node`, ...) also the script it gets; `bash -c` / `-Command` /
+`eval` strings are analysed like a command line, and a PowerShell `$x = "...exe"` / bash `X=...` assignment is followed
+into `& $x` / `"$X"`. So `grep UnrealEditor`, `tasklist | findstr UnrealEditor` or `git commit -m "... Build.bat"`
+never queue. Several matching commands in one line queue for all their resources at once.
+
+**The hook** (in `hooks/agent_budget.py`, every session, main and subagents; Bash and PowerShell; ~15 ms on top of
+the hook's start-up, rules compiled once per call, no server call): a matching command not already under `slot run`
+is rewritten via `hookSpecificOutput.updatedInput` (Claude Code 2.1.295 applies it when the hook gives no
+permission decision, so the normal permission checks then see the wrapped command; `run_in_background` and the other
+fields are kept). The original command travels unchanged in env `DEVTIME_SLOT_CMD` (bash: a single-quoted string,
+with `MSYS2_ENV_CONV_EXCL` so Git Bash doesn't convert paths in it; PowerShell: a literal `@'...'@` here-string) and
+runs in a fresh bash / Windows PowerShell in the same folder; the agent is told it was queued. Refused instead:
+a matching job started in the background inside the command (`&`, `Start-Process` without `-Wait`: it would outlive its
+slot; use `run_in_background`), and loops that wait for another job (a `while` / `until` loop that sleeps and polls
+`tasklist`, `pgrep`, `ps`, `Get-Process`, `kill -0` or a lock file), with a pointer to `slot run`. In subagents such a
+loop also counts as a wait longer than the wait limit, whatever its timeout. Queue time counts toward the tool's
+timeout: long jobs belong in `run_in_background`. Permission rules: an allow rule for the bare command no longer
+matches the wrapped one; sessions in auto / bypass mode are unaffected.
+
+**Escape hatch**: env `DEVTIME_SLOTS=0` (for the session, e.g. in settings.json `env`) or `DEVTIME_SLOTS=0` anywhere in
+a command leaves commands unwrapped and turns the wait-loop refusal off (subagents' wait limit still applies).
+
+**Ordering**: strict FIFO per resource. A ticket starts only when no older waiting ticket wants any of its resources
+and each has room; an exclusive or group request waits until every slot is free, and nothing queued behind it
+overtakes, so it can't starve. A nested `slot run` for a resource its ancestor already holds runs at once (no
+self-deadlock); child processes get `DEVTIME_SLOT_HELD` and `DEVTIME_SLOT_TICKET`.
+
+**Liveness** (no mkdir or PID files as the source of truth): each ticket is `<dir>/tickets/<id>.json`, locked by the
+live `slot` process for its whole life (Windows `msvcrt.locking` on a byte far past the content, so it never blocks
+readers; POSIX `fcntl.flock`); holding slots means owning a ticket in state `holding`. A ticket whose lock can be
+taken has no live owner (crash, kill, closed session, reboot; PID reuse can't fool it): the next process that looks
+at the queue deletes it and logs `swept`. Every queue change happens under `<dir>/queue.lock` (milliseconds). On
+Windows the command runs in a Job Object with `KILL_ON_JOB_CLOSE`, created suspended and assigned before it runs: when
+the `slot` process dies, its whole tree (editor, test runner, their children) dies with it, so no job runs while its
+slot is free; processes the command leaves behind are ended when it exits. On POSIX it runs in its own process group,
+which is ended on max hold, kill or exit (a SIGKILLed wrapper can't take the group with it there). While queued, the
+`slot` process watches its caller (the tool's shell, by handle on Windows): if it is gone, the ticket is dropped.
+After `max_hold` minutes the job's tree is killed, the slot freed and `timeout` logged.
+
+**Exit codes**: the command's own, or 123 stopped by `slot kill`, 124 killed at max hold, 125 the caller went away
+while queued, 127 the command could not be started, 2 usage error, 130 interrupted. If the lock directory can't be
+used (permissions, a sandbox), `slot run` says so and runs the command unqueued rather than blocking the work.
+
+**Log**: `<dir>/log.jsonl`, one JSON line per `acquire` / `release` / `timeout` / `kill` / `gone` / `swept`:
+`t, event, ticket, resource, label, cwd, project` (git root's name), `session` (`CLAUDE_CODE_SESSION_ID`), `org`,
+`pid, waited_s, held_s, exit`; rotated past `log_kb` (one old file kept).
+
+**Dashboard**: `/api/slots?hours=12` (limits, holders, queue, minutes waited and held per resource per hour, recent
+events; another organisation's tickets are shown without label, folder or session). The overview's "Queue waits" card
+shows it, and a "queue wait" usage alert goes to the session of a ticket (of this org) waiting over `alert_wait_min`.
+
+Known limits: only commands the hook sees are queued; a job started inside a script that no rule matches (or by a
+tool other than Bash / PowerShell) is not. Make the script call `slot run` itself or add a rule for the script.
 
 ## Monitoring cost
 
@@ -349,6 +442,8 @@ locally (gitignored) only so the rules can be re-applied. The server binds to 12
     devtime/unreal.py    optional Unreal Editor log harvester: phases, activities, script steps, archive
     devtime/report.py    text summary
     devtime/ab.py        A/B experiments: arms by hash, CLAUDE.md block, report (hooks/agent_budget.py enforces)
+    devtime/slots.py     machine-wide slot queue: tickets, OS locks, Job Objects, status / kill / log, /api/slots
+    devtime/slotrules.py slots.toml, command rules, wait-loop detection, the hook's rewrite (light: the hook imports it)
     static/              the dashboard (vanilla JS, no dependencies)
     config/              default settings, pricing, rules
     examples/            example project profile

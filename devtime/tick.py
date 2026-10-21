@@ -2,7 +2,8 @@
 
     python -m devtime tick                       make sure this org's server is up (no browser), print compact JSON:
         {"url", "org": {id, name}, "reading": {weekly, fiveHour, ageMin} | null, "labels": unlabelled work items,
-         "review": {"due", "lastAt"}, "alerts": active alerts, "cap": CLAUDE.md cap | null, "setup": block exists}
+         "review": {"due", "lastAt"}, "alerts": active alerts, "cap": CLAUDE.md fixed weekly cap | null, "weekly": {mode: reserve | cap, value} | null (the
+         CLAUDE.md rule), "weeklyUsable": percent usable now | null, "setup": block exists}
         Everything is the current org's instance (paths.py). If the org can't be determined it prints
         {"refused": true, "error": ...} and exits 2 without doing anything.
     python -m devtime review-context [--hours 2]  everything the reviewer needs in one call: the /api/watch summary
@@ -96,7 +97,8 @@ def tick():
     numbers = tick_numbers(url, up, now)
     block, cap, five = setup.claude_md_status()
     out.update(reading=numbers.get("reading"), labels=numbers.get("labels", 0), review=review_state(now),
-               alerts=numbers.get("alerts", 0), cap=cap, fiveHourCap=five, setup=block)
+               alerts=numbers.get("alerts", 0), cap=cap, fiveHourCap=five, weekly=setup.claude_md_weekly(),
+               weeklyUsable=numbers.get("weeklyUsable"), setup=block)
     if not up:
         out["server"] = "not answering"
     print(json.dumps(out, separators=(",", ":")))

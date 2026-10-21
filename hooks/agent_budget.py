@@ -90,9 +90,19 @@ DEADLINE = re.compile(r"Add(Seconds|Minutes)\((\d+)\)", re.IGNORECASE)
 LOOP = re.compile(r"\b(until|while)\b", re.IGNORECASE)
 BLOCKING = re.compile(r"\bWait-Process\b|\bWait-Job\b|\bwait\s+\$!|^\s*wait\s*$|\btail\s+-f\b", re.IGNORECASE | re.MULTILINE)
 
+SOURCE_CONTROL = ("Commit only where the project's own instructions say Claude commits, and only locally with git; "
+                  "never push, never `p4 submit` or shelve.")
 HANDOFF = ("Hand the job back instead: end now with a short report: what is done, the exact command to run (or, if it "
            "is already running in the background, its output / log path), and what to check when it finishes. The "
            "main session (1 h cache) runs or waits for it and starts a fresh agent with the result.")
+
+
+def nudge_text(ctx):
+    """The handoff request past CONTEXT_NUDGE tokens of context."""
+    return (f"Agent budget hook: this subagent's context is ~{ctx / 1000:.0f}k tokens and every tool call re-reads "
+            "all of it. Finish the current step (leave the work in a safe state: nothing half-edited), then end with "
+            "a short handoff (what is done, what is next, key paths and commands) so a fresh agent continues from a "
+            f"small context. Don't start a new stage in this agent. {SOURCE_CONTROL}")
 
 
 def wait_seconds(tool, inp):
@@ -405,11 +415,7 @@ def budget(data):
 
     if out is None and ctx >= CONTEXT_NUDGE and ctx >= state["nudged"] + CONTEXT_STEP:
         state["nudged"] = ctx
-        out = {"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": (
-            f"Agent budget hook: this subagent's context is ~{ctx / 1000:.0f}k tokens and every tool call re-reads "
-            "all of it. Finish the current step (commit if it is code), then end with a short handoff (what is done, "
-            "what is next, key paths and commands) so a fresh agent continues from a small context. Don't start a "
-            "new stage in this agent.")}}
+        out = {"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": nudge_text(ctx)}}
     out = with_alerts(out, pending_alerts(data.get("session_id"), agent_id, state), agent_id, event)
     save_state(agent_id, state)
     return out

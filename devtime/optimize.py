@@ -705,7 +705,7 @@ def metrics(data, config, now, days, claude_md, settings):
         "sonnet-default-coding": (w(coding_opus - coding_sonnet) if coding_n else None,
                                   "%d Opus coding agents cost $%d (Sonnet: $%d); A/B first"
                                   % (round(coding_n * week), w(coding_opus), w(coding_sonnet))),
-        "weekly-cap": (None, "cap block %s" % ("present" if claude_md and setup.BLOCK_RE.search(claude_md) else "missing")),
+        "weekly-cap": (None, "weekly reserve block %s" % ("present" if claude_md and setup.BLOCK_RE.search(claude_md) else "missing")),
         "background-not-polling": (w(churn_poll), "%d agent hours a week in poll / sleep calls" % round(wait_s * week / 3600)),
     }
     return m, est

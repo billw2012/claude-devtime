@@ -17,7 +17,7 @@
                                                          delivered to it like a usage alert
     python -m devtime work-items [--days 8] [--max 250]  unlabelled pieces of work and the existing section names
                                                          (JSON), for the scheduled section labeller
-    python -m devtime setup check | claude-md --cap N [--dry-run] | open | parallel [on|off]
+    python -m devtime setup check | claude-md [--reserve-per-day N | --cap W] [--five-hour-cap F] [--dry-run] | open | parallel [on|off]
                                                          what /devtime:start does mechanically (devtime/setup.py)
     python -m devtime analyze [--days 7]                compact JSON of usage metrics and the ranked optimization catalogue
     python -m devtime optimize list | apply ID [--dry-run] | remove ID|all [--dry-run] | adopt ID --heading H | --setting env.KEY [--dry-run]
@@ -127,7 +127,10 @@ def run(argv=None):
     ssub = p.add_subparsers(dest="setup_cmd", required=True)
     ssub.add_parser("check")
     q = ssub.add_parser("claude-md")
-    q.add_argument("--cap", type=float, required=True, help="weekly cap, percent of the all-models limit")
+    g = q.add_mutually_exclusive_group()
+    g.add_argument("--reserve-per-day", type=float, help="weekly reserve: percent of the weekly limit kept per day left "
+                   "before the reset (default settings.weekly_reserve_per_day, 5)")
+    g.add_argument("--cap", type=float, help="fixed weekly cap instead of the reserve, percent of the all-models limit")
     q.add_argument("--five-hour-cap", type=float, help="5-hour cap, percent of the 5-hour limit (omit for none)")
     q.add_argument("--dry-run", action="store_true")
     ssub.add_parser("open")

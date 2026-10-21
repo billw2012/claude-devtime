@@ -1,7 +1,10 @@
 """`python -m devtime setup ...`: the mechanical half of the /devtime:start skill. Output is compact JSON or short text.
 
     setup check                       python, server, recent projects, CLAUDE.md block, duplicate hooks, env, data dir
-    setup claude-md --cap N [--dry-run]   insert / replace the devtime block in <claude dir>/CLAUDE.md
+    setup claude-md [--reserve-per-day N | --cap W] [--five-hour-cap F] [--dry-run]
+                                      insert / replace the devtime block in <claude dir>/CLAUDE.md: a weekly reserve
+                                      of N % per day left before the reset (default: settings.weekly_reserve_per_day,
+                                      5) or a fixed weekly cap of W %
     setup open                        start the server if needed, open the dashboard in the browser
     setup parallel [on|off]           show / set parallel support (settings.parallel in the user's devtime.toml):
                                       the machine-wide slot queue and the agent budget rules
@@ -18,21 +21,22 @@ import sys
 import time
 import webbrowser
 
-from . import config, paths
+from . import config, paths, reserve
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 START = "<!-- devtime:start -->"
 END = "<!-- devtime:end -->"
 BLOCK_RE = re.compile(re.escape(START) + r".*?" + re.escape(END), re.S)
-CAP_RE = re.compile(r"\bat\s+(\d+(?:\.\d+)?)\s*%\s+of the weekly")
+CAP_RE = re.compile(r"\bat\s+(\d+(?:\.\d+)?)\s*%\s+of the weekly")  # fixed cap ("Weekly cap: at 85 % of the weekly ...")
+RESERVE_RE = re.compile(r"\bkeep\s+(\d+(?:\.\d+)?)\s*%\s+of the weekly all-models limit per day")
+LEGACY_RE = re.compile(r"reach a safe point, commit,")  # the wording before 0.8.0 (told sessions to commit)
 FIVE_RE = re.compile(r"\bat\s+(\d+(?:\.\d+)?)\s*%\s+of the 5-hour")
 HOOK_SCRIPTS = ("agent_budget.py", "ensure_server.py")
 
 BLOCK = """{start}
 ## Usage tracking (devtime)
 - On long or autonomous runs, call `mcp__ccd_session_mgmt__get_usage` before launching each agent stage (it records the plan's 5-hour and weekly usage for the devtime dashboard; there is no other source).
-- Weekly cap: at {cap} % of the weekly all-models limit start no new agents or stages; let running ones reach a safe point, commit, stop and tell the user what was left undone. Only the user raises the cap.
-{five}- Name subagents with a short description of the piece of work (it labels work sections on the dashboard).
+{weekly}{five}- Name subagents with a short description of the piece of work (it labels work sections on the dashboard).
 {end}"""
 
 
@@ -52,20 +56,52 @@ def fmt_cap(cap):
     return "%g" % float(cap)
 
 
+ASK_FIRST = ("before any other big step tell the user how close you are and ask first. Small conversational requests "
+             "carry on.")
+CAP_LINE = ("- Weekly cap: at {cap} % of the weekly all-models limit start no new agents or stages; let running ones "
+            "reach a safe point (nothing half-edited), stop and tell the user what was left undone; " + ASK_FIRST +
+            " Only the user raises the cap.\n")
+RESERVE_LINE = ("- Weekly reserve: keep {n} % of the weekly all-models limit per day left before the reset (usable = "
+                "100 - {n} x days left: {week} % with a week left, {three} % with 3 days, {last} % on the last day). "
+                "Check `mcp__ccd_session_mgmt__get_usage` before launching agents or stages (`resetsIn` gives the days "
+                "left). At or above the usable share start no new agents or stages; let running ones reach a safe "
+                "point (nothing half-edited), stop and tell the user what was left undone; " + ASK_FIRST +
+                " Only the user changes the reserve.\n")
 FIVE_LINE = ("- 5-hour cap: at {five} % of the 5-hour limit start no new agents or stages; let running ones reach a safe "
              "point, then wait until the window's `resetsAt` (schedule a wakeup just after it), re-check usage and "
              "continue.\n")
 
 
-def make_block(cap, eol="\n", five=None):
+def weekly_line(cap=None, per_day=None):
+    """The weekly line: a fixed cap when `cap` is given, else a reserve of `per_day` % per day (default 5)."""
+    if cap is not None:
+        return CAP_LINE.format(cap=fmt_cap(cap))
+    n = reserve.DEFAULT_PER_DAY if per_day is None else float(per_day)
+    return RESERVE_LINE.format(n=fmt_cap(n), week=fmt_cap(reserve.usable(n, 7)), three=fmt_cap(reserve.usable(n, 3)),
+                               last=fmt_cap(reserve.usable(n, 1)))
+
+
+def make_block(cap, eol="\n", five=None, per_day=None):
     line = FIVE_LINE.format(five=fmt_cap(five)) if five is not None else ""
-    return BLOCK.format(start=START, end=END, cap=fmt_cap(cap), five=line).replace("\n", eol)
+    return BLOCK.format(start=START, end=END, weekly=weekly_line(cap, per_day), five=line).replace("\n", eol)
 
 
 def block_caps(block):
-    """(weekly cap, 5-hour cap) found in a devtime block's text, None where absent."""
+    """(fixed weekly cap, 5-hour cap) found in a devtime block's text, None where absent."""
     found = [r.search(block or "") for r in (CAP_RE, FIVE_RE)]
     return tuple(float(m.group(1)) if m else None for m in found)
+
+
+def block_weekly(block):
+    """The weekly rule a devtime block states: {"mode": "reserve", "value": N % per day} or {"mode": "cap", "value": W}
+    (both the current and the pre-0.8 wording; "legacy" is true for the latter), None if it has neither."""
+    m = RESERVE_RE.search(block or "")
+    if m:
+        return {"mode": "reserve", "value": float(m.group(1)), "legacy": False}
+    m = CAP_RE.search(block or "")
+    if m:
+        return {"mode": "cap", "value": float(m.group(1)), "legacy": bool(LEGACY_RE.search(block))}
+    return None
 
 
 def read_text(path):
@@ -110,26 +146,32 @@ def remove_block(text, block_re):
     return head + tail, True
 
 
-def new_claude_md(text, cap, five=None):
-    """Returns (new text, action) with the devtime block inserted or replaced; everything else is kept as is."""
-    return upsert_block(text, BLOCK_RE, lambda eol: make_block(cap, eol, five))
+def new_claude_md(text, cap, five=None, per_day=None):
+    """Returns (new text, action) with the devtime block inserted or replaced; everything else is kept as is. `cap`: a
+    fixed weekly cap; without it a reserve of `per_day` % per day."""
+    return upsert_block(text, BLOCK_RE, lambda eol: make_block(cap, eol, five, per_day))
 
 
-def claude_md_cmd(cap, dry_run=False, five=None):
+def claude_md_cmd(cap=None, dry_run=False, five=None, per_day=None):
+    """Neither `cap` nor `per_day`: what the settings say (weekly_cap, else weekly_reserve_per_day, else 5 % a day)."""
+    if cap is None and per_day is None:
+        chosen = reserve.settings_rule(config.user_settings())
+        cap, per_day = (chosen["value"], None) if chosen["mode"] == "cap" else (None, chosen["value"])
     path = claude_md_path()
     old = read_text(path)
-    new, action = new_claude_md(old, cap, five)
+    new, action = new_claude_md(old, cap, five, per_day)
+    shown = {"cap": fmt_cap(cap)} if cap is not None else {"reservePerDay": fmt_cap(reserve.DEFAULT_PER_DAY if per_day is None else per_day)}
     if dry_run:
         diff = "".join(difflib.unified_diff((old or "").splitlines(True), new.splitlines(True),
                                             "a/CLAUDE.md" if old is not None else "/dev/null", "b/CLAUDE.md"))
-        print(json.dumps({"path": path, "action": action, "dryRun": True, "cap": fmt_cap(cap)}, separators=(",", ":")))
+        print(json.dumps({"path": path, "action": action, "dryRun": True, **shown}, separators=(",", ":")))
         print(diff or "(no change)")
         return
     if new != old:
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "wb") as f:
             f.write(new.encode("utf-8"))
-    print(json.dumps({"path": path, "action": action, "cap": fmt_cap(cap)}, separators=(",", ":")))
+    print(json.dumps({"path": path, "action": action, **shown}, separators=(",", ":")))
 
 
 def norm(p):
@@ -197,7 +239,7 @@ def check(projects=True):
         "server": {"url": "http://%s:%d/" % (hooks.HOST, number), "answering": hooks.ours(number)},
         "claudeDir": claude_dir(),
         "claudeMd": {"path": claude_md_path(), "exists": text is not None, "block": m is not None,
-                     "cap": cap, "fiveHourCap": five},
+                     "cap": cap, "fiveHourCap": five, "weekly": block_weekly(m.group(0) if m else None)},
         "settings": {"path": settings_path(), "exists": raw is not None, "error": settings_error,
                      "duplicateHooks": find_hook_duplicates(settings),
                      "autoCompactWindow": env.get("CLAUDE_CODE_AUTO_COMPACT_WINDOW")},
@@ -274,6 +316,14 @@ def claude_md_status():
     return (m is not None,) + block_caps(m.group(0) if m else None)
 
 
+def claude_md_weekly():
+    """The weekly rule in <claude dir>/CLAUDE.md's devtime block as reserve.rule() wants it, None without one."""
+    text = read_text(claude_md_path())
+    m = BLOCK_RE.search(text) if text else None
+    found = block_weekly(m.group(0)) if m else None
+    return {"mode": found["mode"], "value": found["value"]} if found else None
+
+
 def open_cmd(wait_s=60):
     url, ok = ensure_server(wait_s)
     if not ok:
@@ -285,11 +335,12 @@ def open_cmd(wait_s=60):
 
 
 def main(args):
-    """args: argparse namespace with setup_cmd, cap, dry_run."""
+    """args: argparse namespace with setup_cmd, cap, reserve_per_day, five_hour_cap, dry_run."""
     if args.setup_cmd == "check":
         check()
     elif args.setup_cmd == "claude-md":
-        claude_md_cmd(args.cap, args.dry_run, getattr(args, "five_hour_cap", None))
+        claude_md_cmd(getattr(args, "cap", None), args.dry_run, getattr(args, "five_hour_cap", None),
+                      getattr(args, "reserve_per_day", None))
     elif args.setup_cmd == "open":
         return open_cmd()
     elif args.setup_cmd == "parallel":

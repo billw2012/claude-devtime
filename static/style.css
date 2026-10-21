@@ -172,7 +172,8 @@ a.nav:hover { text-decoration: underline; }
 .tile .delta.flat { color: var(--text-muted); }
 .tile { position: relative; }
 .tile[title] { cursor: help; }
-.gauge { height: 8px; border-radius: 4px; background: var(--surface-2); margin-top: 8px; overflow: hidden; }
+.gauge { height: 8px; border-radius: 4px; background: var(--surface-2); margin-top: 8px; overflow: hidden; position: relative; }
+.gauge .mark { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: var(--text-primary); }
 .gauge i { display: block; height: 100%; background: var(--accent); }
 .gauge.warn i { background: var(--warning); }
 .gauge.over i { background: var(--critical); }

@@ -31,6 +31,13 @@ poll_s = 10               # server re-scans transcripts this often
 # Rough weekly plan allowance in API-equivalent USD, for the overview's weekly-limit chart. Only a starting point: once
 # usage readings are available (from get_usage calls, or the desktop app's usage history) the allowance is fitted from them.
 # weekly_budget_usd = 5000   # only if no usage readings exist: the allowance is fitted from the plan's readings
+# Weekly reserve: a safety margin so the week never runs out by accident. usable = 100 - weekly_reserve_per_day x days
+# until the weekly reset (65 % with a week left, 85 % with 3 days, 95 % on the last day at 5). Sessions follow the rule
+# in the devtime block of ~/.claude/CLAUDE.md (`python -m devtime setup claude-md --reserve-per-day N`); this is the
+# default for that command and what the dashboard shows when there is no block. Put your own in <data dir>/config/devtime.toml.
+weekly_reserve_per_day = 5
+# A fixed cap (percent of the weekly limit) instead of the reserve; unset = use the reserve.
+# weekly_cap = 85
 # Optional: any instant the plan's weekly limit resets (your usage page shows it); resets repeat every 7 days. Not needed
 # when readings carry the reset time.
 # weekly_reset = "2026-01-02T00:00:00Z"

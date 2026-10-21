@@ -24,10 +24,10 @@ is read from the local transcripts.
 
 Run `/devtime:start` in Claude Code after installing. The first time it
 
-- checks Python, asks for a weekly usage cap (85 % suggested) and adds a short "Usage tracking (devtime)" block to
+- checks Python, asks for a weekly reserve (5 % per day suggested; or a fixed cap) and adds a short "Usage tracking (devtime)" block to
   `~/.claude/CLAUDE.md` (between `<!-- devtime:start -->` and `<!-- devtime:end -->`; the rest of the file is untouched,
   re-running replaces the block). The block asks sessions to call `get_usage` before launching agent stages, which is
-  where the dashboard's plan readings come from, and to stop starting agents at the cap;
+  where the dashboard's plan readings come from, and to stop starting agents when the weekly usage reaches the usable share (see Weekly reserve below);
 - offers to remove duplicate hook entries from `settings.json` (e.g. from an earlier manual install; a `.bak` is kept);
 - asks whether to also set up parallel support (below; the recommended answer is no) and, via
   `python -m devtime setup parallel on|off`, records the choice;
@@ -37,7 +37,7 @@ Run `/devtime:start` in Claude Code after installing. The first time it
 The loop lives in the session (keep it open; a cheap model such as Sonnet or Haiku is fine for it). Each pass adds
 very little context: one `get_usage` call (records the plan reading via the transcript), one
 `python -m devtime tick` call (server check plus a compact JSON: reading, unlabelled work items, whether a review is
-due, active alerts, cap), and, only when there is something to judge, a small Haiku subagent:
+due, active alerts, weekly rule and usable share), and, only when there is something to judge, a small Haiku subagent:
 
 - `devtime:labeller` names a work section for each unlabelled agent / session (`work-items` -> `work-assign -`), which
   drives the dashboard's weekly work lane;
@@ -45,7 +45,7 @@ due, active alerts, cap), and, only when there is something to judge, a small Ha
   `review-log.md`), leaves at most 3 notes with `review-note` for sessions that waste money (wrong agent types, waiting
   sessions, no hand-off) and records the review with `review-done`. Deliberate `AB:` experiment arms are never flagged.
 
-The mechanical parts are `python -m devtime setup check | claude-md --cap N [--dry-run] | open`, `tick`,
+The mechanical parts are `python -m devtime setup check | claude-md [--reserve-per-day N | --cap W] [--five-hour-cap F] [--dry-run] | open`, `tick`,
 `review-context [--hours 2]` (under 5 KB: the 25 most expensive subagents, the last 12 review lines), `review-done --text ...` and `work-assign -` (JSON on stdin); `CLAUDE_CONFIG_DIR`
 overrides `~/.claude`, `DEVTIME_NO_SERVER_START=1` stops `tick` from starting a server.
 
@@ -74,8 +74,22 @@ under `[settings]` in `~/.claude/devtime/config/devtime.toml`. To switch a singl
     slots = true          # overrides `parallel` for that feature (true or false)
     agent_budget = false
 
+**Weekly reserve.** A safety margin so the week never runs out by accident: usable = 100 - reserve x days until the
+weekly reset (fractional days; clamped to 0..100), e.g. at 5 % per day 65 % with a week left, 85 % with 3 days, 92.5 %
+with a day and a half, 95 % on the last day. At or above it, sessions start no new agents or stages, let running ones
+reach a safe point (nothing half-edited), stop and tell the user; before any other big step they say how close they are
+and ask first; small conversational requests carry on. The rule sessions follow is the "Weekly reserve" line (or the
+fixed "Weekly cap: at W %" line) of the CLAUDE.md block: `setup claude-md --reserve-per-day N` (default
+`settings.weekly_reserve_per_day`, 5) or `--cap W`; `setup check` reports which form a block has (`claudeMd.weekly`:
+mode `reserve` or `cap`, `legacy` for the pre-0.8 wording, which still works). Settings: `weekly_reserve_per_day` and
+an optional fixed `weekly_cap` (a number) in `config/devtime.toml` are the defaults for that command and what the
+dashboard uses when there is no block. The dashboard shows "usable now" on the weekly tile (a marker on the gauge) and
+as a dashed line on the weekly-limit chart; `/api/tick` and `tick` carry it as `weeklyUsable`. devtime never tells a
+session to commit or submit: handoffs say to leave the work in a safe state, and commits are made only where the
+project's own instructions say so, locally with git (never push, never `p4 submit` or shelve).
+
 Optimization items that only make sense for parallel work (`requires = "parallel"` in the catalogue: hand-off past
-250k, at most 2-3 agents, the weekly cap) are offered by `/devtime:optimize` only when `parallel` is on (an installed one
+250k, at most 2-3 agents, the weekly reserve) are offered by `/devtime:optimize` only when `parallel` is on (an installed one
 stays listed so it can be removed; `optimize apply <id>` always works). `autocompact-400k` and the rest are always
 offered. Needs Python 3.11+: on older Python the hooks and the launcher do nothing (the launcher prints an error and
 exits 1 so `slot run` is not lost silently).
@@ -86,7 +100,7 @@ exits 1 so `slot run` is not lost silently).
 $/week, adds up to three unproven ideas of its own from the metrics, asks which to apply (globally, or as an A/B with
 `/devtime:ab <id>`), shows a dry-run diff and applies. Items: slim agent types, long jobs on a Haiku runner,
 read-only work on Haiku, hand-off past ~250k context, `CLAUDE_CODE_AUTO_COMPACT_WINDOW=400000`, scripts first,
-2-3 agents at once, Sonnet for well-specified coding (suggest A/B), the weekly cap, background jobs instead of poll
+2-3 agents at once, Sonnet for well-specified coding (suggest A/B), the weekly reserve, background jobs instead of poll
 loops. Each item has the summary, the metric that drives it and what was measured on the author's own usage.
 
 - `python -m devtime analyze [--days 7]`: compact JSON (~2.5 KB): cost per week by model and role, base context by

@@ -15,12 +15,17 @@ If the args are exactly `tick`, do only the **pass** below (no setup, no browser
 
 1. Run `python -m devtime setup check` (JSON; the first scan can take a minute). If `pythonOk` is false, say Python
    3.11+ is needed and stop.
-2. If `claudeMd.block` is false: ask both usage caps in ONE AskUserQuestion call with two questions, each with the
-   options "100 %", "95 %", "85 %", "70 %" (the widget adds a custom answer): "At what share of your WEEKLY limit
-   should sessions stop starting new agents?" (recommend 85 %) and "At what share of the current 5-HOUR window should
-   sessions pause new agents until it resets?" (recommend 95 %). Run
-   `python -m devtime setup claude-md --cap W --five-hour-cap F --dry-run`, show the diff and, on yes, run it without
-   `--dry-run`. Re-running this command later changes the caps.
+2. If `claudeMd.block` is false: ask the weekly reserve and the 5-hour cap in ONE AskUserQuestion call with two
+   questions. First (header "Reserve"): "How much of your weekly limit should Claude keep in reserve?", description "A
+   margin so the week never runs dry by accident; it shrinks as the reset gets closer.", options "5% per day until the
+   reset (Recommended)" (65% usable with a week left, 85% with 3 days, 95% on the last day), "10% per day" (30%, 70%,
+   90%) and "2% per day" (86%, 94%, 98%); a fixed cap comes through the automatic Other (a number W, in percent).
+   Second: "At what share of the current 5-HOUR window should sessions pause new agents until it resets?" with options
+   "100 %", "95 %", "85 %", "70 %" (recommend 95 %). Run
+   `python -m devtime setup claude-md --reserve-per-day N --five-hour-cap F --dry-run` (`--cap W` instead of
+   `--reserve-per-day N` for a fixed cap), show the diff and, on yes, run it without `--dry-run`. Re-running this
+   command later changes the reserve or caps. (`claudeMd.weekly` of `setup check` says which form an existing block
+   has: `reserve` or `cap`; `legacy: true` is the pre-0.8 wording, which still works and is refreshed by re-running.)
 3. If `settings.duplicateHooks` is not empty (hook entries in settings.json that repeat the plugin's own), show them
    (event, command) and offer to remove them. Only on yes: copy settings.json to settings.json.bak, remove exactly
    those entries (and any group or event left empty), keep everything else, check it still parses. If
@@ -50,7 +55,7 @@ If the args are exactly `tick`, do only the **pass** below (no setup, no browser
    if the tool `mcp__ccd_session_mgmt__get_usage` exists, call it (load it with ToolSearch query
    `select:mcp__ccd_session_mgmt__get_usage` if it is deferred; skip silently if unavailable). The dashboard picks the
    reading up from the transcript; ignore its output. Otherwise skip this step.
-2. Run `python -m devtime tick` (JSON: url, org, reading, labels, review, alerts, cap, setup). Each organisation on
+2. Run `python -m devtime tick` (JSON: url, org, reading, labels, review, alerts, cap, weekly, weeklyUsable, setup). Each organisation on
    this PC has its own devtime (own data, server and port), and the pass works on the organisation this session is
    signed into. If the JSON says `"refused": true` (no organisation could be determined), tell the user why (its
    `error`), do not start or continue the loop, and stop. Mention once that every other organisation on the PC needs
@@ -58,4 +63,4 @@ If the args are exactly `tick`, do only the **pass** below (no setup, no browser
 3. If `labels` > 0, launch the agent `devtime:labeller` in the foreground. If `review.due` is true, launch
    `devtime:reviewer` likewise. If the scoped name is not found, try `labeller` / `reviewer`. Prompt: "Plugin root:
    ${CLAUDE_PLUGIN_ROOT}; run commands from there."
-4. Reply with ONE line: weekly % (from `reading`, or "no reading"), labels done, notes left, URL.
+4. Reply with ONE line: weekly % (from `reading`, or "no reading"; add "usable N %" from `weeklyUsable` when set), labels done, notes left, URL.

@@ -73,9 +73,15 @@ function renderTiles(o) {
   const c = o.current, p = o.previous || {};
   const share = (a, b) => (b ? a / b : null);
   const wk = o.week;
+  const usable = o.limits && o.limits.usable != null ? o.limits.usable : null;  // % of the week usable now (weekly reserve)
   const gauge = wk.share != null ? el("div", { class: `gauge ${wk.share > 1 ? "over" : wk.share > 0.8 ? "warn" : ""}` },
     el("i", { style: `width:${Math.min(100, 100 * wk.share).toFixed(1)}%` })) : null;
   if (gauge) gauge.firstChild.style.width = `${Math.min(100, 100 * wk.share).toFixed(1)}%`;
+  if (gauge && usable != null) {
+    const mark = el("b", { class: "mark", title: `usable now under the weekly reserve: ${usable.toFixed(1)}%` });
+    mark.style.left = `${Math.min(100, usable).toFixed(1)}%`;
+    gauge.append(mark);
+  }
   $("#eff").replaceChildren(
     tile(hasAllowance() ? "Cost (% of week)" : "Cost", cost(c.cost), `${cost(c.costPerHour)}/h · subagents ${pct(share(c.subCost, c.cost))} · Opus ${pct(share(c.opusCost, c.cost))}`,
       `Estimated API-equivalent cost of every request in the range (token counts × config pricing)${hasAllowance() ? `: ${money(c.cost)}, ${money(c.costPerHour)}/h. Shown as a share of the weekly limit (allowance ~${money(S.allowance)}).` : "."}`,
@@ -93,7 +99,7 @@ function renderTiles(o) {
       "Share of input tokens read from the prompt cache (cheap) rather than written or sent fresh.",
       c.cacheHit, p.cacheHit, "up"),
     tile(o.limits ? (fresh(o.limits) ? "Weekly limit used" : "Weekly limit used (est.)") : "7-day usage (est.)", wk.share != null ? pct(wk.share) : money(wk.cost),
-      wk.budget ? `${money(wk.cost)} of ~${allowanceText(o.limits, wk.budget)}${o.limits ? ` · resets ${when(o.limits.end)}` : " weekly allowance"}, all projects` : "set weekly_budget_usd in config",
+      wk.budget ? `${money(wk.cost)} of ~${allowanceText(o.limits, wk.budget)}${o.limits ? ` · resets ${when(o.limits.end)}` : " weekly allowance"}, all projects${usable != null ? ` · usable now: ${usable.toFixed(1)} %` : ""}` : "set weekly_budget_usd in config",
       o.limits ? "Estimated cost since the plan's last weekly reset (weekly_reset in config/devtime.toml) against weekly_budget_usd, calibrated from the usage % the plan reported."
         : "Last 7 days' estimated cost against weekly_budget_usd (config/devtime.toml). Set weekly_reset to follow the plan's own week.",
       null, null, null, gauge),
@@ -319,6 +325,10 @@ function renderLimit(o) {
   const lim = svg("line", { x1: m.l, x2: W - m.r, y1: Y(1), y2: Y(1), stroke: css("--critical"), "stroke-width": 1.5 });
   lim.append(svg("title", {})); lim.firstChild.textContent = `weekly limit (~${allowanceText(L, L.budget)} API-equivalent)`; root.append(lim);
   const lt = svg("text", { x: m.l + 4, y: Y(1) - 4, fill: css("--critical"), "font-size": 11 }); lt.textContent = "weekly limit"; root.append(lt);
+  if (L.usable != null && L.usable < 100) {  // the weekly reserve: sessions stop starting agents here
+    const u = svg("line", { x1: m.l, x2: W - m.r, y1: Y(L.usable / 100), y2: Y(L.usable / 100), stroke: css("--warning"), "stroke-width": 1.5, "stroke-dasharray": "4 3" });
+    u.append(svg("title", {})); u.firstChild.textContent = `usable now under the weekly reserve: ${L.usable.toFixed(1)}%`; root.append(u);
+  }
   const pts = L.used.map((v, i) => [X(Math.min(L.start + (i + 1) * L.step, L.now)), Y(v)]);
   pts.unshift([X(L.start), Y(0)]);
   const path = pts.map((p) => p.join(",")).join("L");
@@ -367,7 +377,7 @@ function renderLimit(o) {
   const s = L.session;
   const R = L.reading;
   const read = R ? `${pct(R.share)} at ${clock(R.t)} (app${R.exact ? "" : " history"})` + (L.now - R.t > 600 ? ` · ~${pct(L.share)} now` : "") : `~${pct(L.share)} (est.)`;
-  $("#limit-sub").textContent = `${L.allowance > 0 ? `allowance ~${allowanceText(L)} · ` : ""}${read} · resets ${L.resetGuessed ? "≈ " : ""}${when(L.end)}` + (s.start ? ` · 5-hour window ${R && R.exact && L.now - R.t < 3600 ? `${pct(R.five)} used, ` : ""}ends ${clock(s.end)}` : "");
+  $("#limit-sub").textContent = `${L.allowance > 0 ? `allowance ~${allowanceText(L)} · ` : ""}${read} · resets ${L.resetGuessed ? "≈ " : ""}${when(L.end)}${L.usable != null ? ` · usable now: ${L.usable.toFixed(1)} %` : ""}` + (s.start ? ` · 5-hour window ${R && R.exact && L.now - R.t < 3600 ? `${pct(R.five)} used, ` : ""}ends ${clock(s.end)}` : "");
   const fate = (p) => (p.limitAt ? `limit hit ${when(p.limitAt)}` : `${pct(p.atReset)} at reset`);
   const items = [[R ? "used" : "used (est.)", cUsed, L.fit ? `fitted to ${L.fit.samples} app samples: allowance ~${allowanceText(L)} API-equivalent${L.fit.sigma != null ? `; readings scatter ±${(100 * L.fit.sigma).toFixed(1)} points around the fit` : ""}${familyText(L.fit)}` : `weekly_budget_usd ${money(L.budget)}`],
     ...L.pace.map((p, i) => [`pace ${p.label}: ${fate(p)}`, cPace[i], `from ${when(p.from)}`]),

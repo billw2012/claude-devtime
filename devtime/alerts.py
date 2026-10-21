@@ -88,7 +88,7 @@ ADVICE = {
                   "if it is mostly waiting, stop it and run its long jobs from the main session",
     "cache churn": "it is waiting on slow jobs and re-writing its whole context each time it wakes: hand the jobs to "
                    "the main session (background, 1 h cache) and end the agent",
-    "big context": "finish the step, commit, hand off to a fresh agent with a short brief",
+    "big context": "finish the step (leave the work in a safe state, nothing half-edited), hand off to a fresh agent with a short brief",
     "burn": "check what it is doing: a poll loop, re-reading big files or images, or an Opus agent on routine work",
     "read-only on a big model": "read-only work (searching, reading files or logs, checking progress) goes to the "
                                 "\"reader\" agent type (Haiku, slim) from now on",

@@ -68,7 +68,8 @@ detect = '(?i)hand ?off.{0,80}250k|250k.{0,80}hand ?off'
 kind = "claude_md"
 text = """## Subagent hand-off
 - One stage per subagent: it ends when its stage is done, and the next stage gets a fresh agent (no long chains of follow-up tasks or resumes into a big context).
-- A subagent whose context passes ~250k tokens finishes its current step, commits, and ends with a short handoff (done / next / key paths and commands). The caller continues with a fresh agent. Compaction loses detail, so hand off before it comes to that."""
+- A subagent whose context passes ~250k tokens finishes its current step (leaves the work in a safe state: nothing half-edited), and ends with a short handoff (done / next / key paths and commands). The caller continues with a fresh agent. Compaction loses detail, so hand off before it comes to that.
+- Commit only where the project's own instructions say Claude commits, and only locally with git; never push, never `p4 submit` or shelve."""
 
 [[opt]]
 id = "autocompact-400k"
@@ -129,15 +130,15 @@ text = """## Model choice
 [[opt]]
 id = "weekly-cap"
 requires = "parallel"
-title = "Weekly usage cap"
-summary = "Sessions call get_usage before launching agents and stop starting new ones at the cap, so the week never ends in a hard stop."
+title = "Weekly usage reserve"
+summary = "Sessions call get_usage before launching agents and stop starting new ones at the usable share (100 - reserve per day x days to the reset), so the week never ends in a hard stop."
 signal = "whether the /devtime:start CLAUDE.md block exists"
-evidence = "Without a cap an autonomous run keeps launching stages until the plan's weekly limit blocks everything."
-detect = '(?i)weekly cap|weekly all-models limit'
+evidence = "Without a reserve an autonomous run keeps launching stages until the plan's weekly limit blocks everything."
+detect = '(?i)weekly (cap|reserve)|weekly all-models limit'
 
 [[opt.apply]]
 kind = "note"
-text = "Run /devtime:start: it asks for the cap and writes the 'Usage tracking (devtime)' block into ~/.claude/CLAUDE.md."
+text = "Run /devtime:start: it asks how much of the weekly limit to keep in reserve and writes the 'Usage tracking (devtime)' block into ~/.claude/CLAUDE.md."
 
 [[opt]]
 id = "background-not-polling"

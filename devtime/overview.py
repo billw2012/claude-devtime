@@ -21,7 +21,7 @@ import statistics
 import time
 import tomllib
 
-from . import fit as fitting, orgs, own, paths
+from . import fit as fitting, orgs, own, paths, reserve as reserving
 
 RANGES = {"1h": 3600, "6h": 6 * 3600, "12h": 12 * 3600, "24h": 86400, "7d": 7 * 86400, "30d": 30 * 86400}
 COMMIT = re.compile(r"^\s*(commit|git commit)\b|\bgit\b(\s+-C\s+\S+)?\s+(add\b[^\n]*&&\s*git\b[^\n]*\s)?commit\b"
@@ -850,6 +850,25 @@ def guess_reset(samples):
     return max((b for _, b in spans), key=score)
 
 
+def next_reset(samples, settings, now):
+    """The next weekly reset: from the latest plan reading that carries a reset time (rolled forward by whole weeks if
+    that has passed), else from settings.weekly_reset; None when neither is known."""
+    anchor = next((s[4] for s in reversed(samples) if s[4]), None)
+    if not anchor:
+        try:
+            anchor = iso_ts(settings.get("weekly_reset"))
+        except ValueError:
+            anchor = None
+    if not anchor:
+        return None
+    return anchor + max(0, math.ceil((now - anchor) / WEEK)) * WEEK if anchor <= now else anchor
+
+
+def weekly_usable(settings, reset, now):
+    """How much of the weekly limit may be used now under the weekly reserve (percent), None if the reset is unknown."""
+    return reserving.usable_now(reserving.rule(settings), reset, now)
+
+
 def limits(data, idx, settings, now, samples=None):
     """Plan-limit view for the whole account: weekly usage as a share of the weekly allowance, the plan's own samples,
     the 5-hour session windows, and where the week ends at the pace since the weekly reset and since the session one.
@@ -1003,7 +1022,7 @@ def limits(data, idx, settings, now, samples=None):
                 "limitAt": hit if hit is not None and hit < end else None}
     return {"start": start, "end": end, "now": now, "step": step, "used": used, "share": share, "budget": budget,
             "allowance": budget, "allowanceError": fit.get("allowanceError") if fit else None,
-            "resetGuessed": bool(guessed),
+            "resetGuessed": bool(guessed), "usable": weekly_usable(settings, end, now),
             "changes": [{"t": t, "label": label} for t, label in changes() if start <= t <= end],
             "work": large_work(data, start, now, budget),
             "fit": fit, "samples": [(round(s[0]), round(s[2], 3)) for s in week if s[0] >= start],
@@ -1155,7 +1174,8 @@ def watch(data, idx, alerts, now, hours=3):
 
 def tick_summary(data, settings, alerts, now):
     """What a periodic dashboard pass needs: the latest plan-usage reading ({weekly, fiveHour (percent), ageMin} or
-    None), the number of unlabelled work items and of active alerts."""
+    None), the weekly share usable now under the weekly reserve (percent, None if the reset is unknown), the number of
+    unlabelled work items and of active alerts."""
     samples = plan_samples(settings, data.get("org"), single_org=bool(data.get("singleOrg")))
     reading = None
     if samples:
@@ -1163,6 +1183,7 @@ def tick_summary(data, settings, alerts, now):
         reading = {"weekly": round(sd * 100, 1), "fiveHour": round(fh * 100, 1), "ageMin": round(max(0, now - t) / 60)}
     idx = Index(data)
     lo = now - TICK_DAYS * 86400
-    return {"reading": reading, "labels": len(work_items(data, now, 8, 10 ** 6)["items"]),
+    usable = weekly_usable(settings, next_reset(samples, settings, now), now)
+    return {"reading": reading, "weeklyUsable": None if usable is None else round(usable, 1), "labels": len(work_items(data, now, 8, 10 ** 6)["items"]),
             "alerts": sum(1 for a in alerts if a.get("active")), "devtimeDays": TICK_DAYS,
             "devtime": own_usage(data, idx, lo, now, window_cost(idx, lo, now))}

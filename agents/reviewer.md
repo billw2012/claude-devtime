@@ -13,7 +13,7 @@ Run every command as `cd "${CLAUDE_PLUGIN_ROOT}" && python -m devtime ...` (use 
 2. Judge the summary against these rules:
    - Read-only subagents (searching, reading files or logs, checking progress) should be a slim read-only agent type on Haiku (such as `reader`). Coding stages should be a slim coding type (such as `coder`); `general-purpose` only when an agent needs MCP tools, the browser or its own subagents (it carries about twice the fixed context on every call). Sonnet or Opus is for writing code and judgement.
    - Long jobs (builds, test suites, renders, editor runs) go to a runner agent (Haiku). Main sessions and coding agents should not wait or poll themselves.
-   - Subagents hand off before about 250k context. No more than 2-3 agents should work at once across all sessions. Respect the user's weekly cap if a session is far past it.
+   - Subagents hand off before about 250k context. No more than 2-3 agents should work at once across all sessions. Respect the user's weekly reserve (or fixed cap) if a session is far past it.
    - A stage costing far more than its peers (for example over $20), or many agents with no commits, is worth a question.
    - NEVER flag deliberate A/B arms: agents tagged `AB:` follow their experiment, so their model choices (Opus planners, rotating Opus / Sonnet implementers, Sonnet runners alternating with Haiku ones) are on purpose. Do flag a coding agent without an `AB:` tag in a session that has other `AB:` agents.
    Only raise something concrete, likely to save real money, and not already covered by an active alert.

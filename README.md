@@ -53,8 +53,9 @@ session of each org you want to track; `python -m devtime org` shows which org a
 
 **`/devtime:start`** sets everything up the first time and keeps it running. It checks Python and, with your confirmation, adds a
 marked block to `~/.claude/CLAUDE.md` that asks sessions to read `get_usage` before launching agent stages and to stop
-starting new ones at a share of the weekly limit you choose (100 / 95 / 85 / 70 % or your own), and to pause new
-agents at a share of the current 5-hour window until it resets. It offers to remove duplicate hook entries, starts the
+starting new ones once the weekly limit is used up to the usable share: a reserve you choose (5 % of the limit per day
+left before the reset by default: 65 % usable with a week left, 85 % with 3 days, 95 % on the last day; or a fixed cap),
+and to pause new agents at a share of the current 5-hour window until it resets. It offers to remove duplicate hook entries, starts the
 dashboard and opens it, then runs a 30-minute loop in the session: record a plan reading, label new work for the
 weekly work lane, and every two hours let a small reviewer agent flag sessions that waste money. Keep that session
 open; a cheap model is fine for it.

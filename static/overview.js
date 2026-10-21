@@ -456,6 +456,15 @@ function renderMonitoring(o) {
     m.bySession, "No Monitor wakes in this range.");
 }
 
+// ------------------------------------------------------------------------------------------------------ devtime's own usage
+function renderOwn(o) {
+  const d = o.devtime || { cost: 0, share: null, requests: 0, byCategory: {} };
+  $("#own-sub").textContent = d.requests ? `${cost(d.cost)}${d.share != null ? ` · ${pct(d.share)} of cost in this range` : ""}` : "";
+  const rows = Object.entries(d.byCategory).filter(([, c]) => c > 0).map(([name, c]) => ({ name, cost: c, share: d.cost ? c / d.cost : null }));
+  smallTable($("#own-cats"), "By category", [["Category", (r) => r.name], ["Cost", (r) => cost(r.cost), 1], ["Share of devtime", (r) => r.share == null ? "" : pct(r.share), 1]],
+    rows, "No devtime usage in this range.");
+}
+
 // ------------------------------------------------------------------------------------------------------ experiments
 function smallTable(host, title, cols, rows, empty) {
   if (!rows.length) { host.replaceChildren(el("h3", {}, title), el("div", { class: "sub" }, empty)); return; }
@@ -503,7 +512,7 @@ async function refresh() {
     S.data = o;
     S.allowance = o.limits && o.limits.allowance > 0 ? o.limits.allowance : null;
     S.alerts = (a.alerts || []).filter((x) => S.project === "*" || !x.project || x.project === S.project);
-    renderTiles(o); renderLive(o); renderSlots(q); renderAlerts(); renderTrend(o); renderLimit(o); renderThroughput(o); renderSpenders(o); renderMonitoring(o); renderExperiments(o);
+    renderTiles(o); renderLive(o); renderSlots(q); renderAlerts(); renderTrend(o); renderLimit(o); renderThroughput(o); renderSpenders(o); renderMonitoring(o); renderOwn(o); renderExperiments(o);
     $("#live").textContent = `updated ${clock(o.now)}`;
     $("#live").classList.toggle("on", o.live.length > 0);
   } catch (e) {

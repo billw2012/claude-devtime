@@ -383,6 +383,18 @@ and by main session; `/api/watch` has a short version (`monitoring`: totals, top
 start its description with `MON:<name>` and prefix its output lines with `[MON:<name>] ` (`| sed -u 's/^/[MON:name] /'`).
 Tests: `python -m unittest discover -s tests`.
 
+## devtime's own usage
+
+What devtime itself costs, as a breakdown of the totals (it stays part of them). Counted: subagents whose `agentType`
+is `devtime:<name>` other than `devtime:coder`, `devtime:reader` and `devtime:runner` (those do your own work), and
+main-session turns driven by a devtime skill, from a `/devtime:<skill>` slash command (or a `Skill` call of a `devtime:*`
+skill) until the next user prompt that is not a devtime command. Categories: `loop` (`/devtime:start`, including its
+`tick` passes), `labeller`, `reviewer`, `setup & optimize` (every other devtime skill or agent). Only the command /
+skill / agent-type name is read (the scan keeps a `cmd` event with the name; the request carries a flag), never the
+prompt text. The overview's **devtime's own usage** card, the `devtime` line of `python -m devtime report`,
+`/api/overview` (`devtime`) and `/api/tick` (`devtime`, over the last `devtimeDays` = 7 days) give `{cost, share,
+requests, byCategory}`. Tests: `tests/test_own.py`.
+
 ## Weekly limit and throughput
 
 The overview's **Weekly limit** chart shows the account's usage since the plan's last weekly reset as a share of the

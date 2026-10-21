@@ -61,7 +61,9 @@ class Tick(Base):
         with mock.patch.object(tick.setup, "ensure_server", return_value=("http://x/", True)), \
                 mock.patch.object(tick, "server_json", return_value=theirs), \
                 mock.patch.object(tick, "local_store") as local:
-            local.return_value.slice.return_value = {"transcripts": [], "org": paths.ORG}
+            local.return_value.slice.return_value = {
+                "transcripts": [], "org": paths.ORG, "kinds": [], "labels": [], "flags": {}, "tok": {"i": []},
+                "iv": {"t": [], "s": [], "e": [], "k": [], "l": [], "f": []}}
             local.return_value.alerts.list.return_value = []
             out = json.loads(self.capture(tick.tick))
         local.assert_called_once()

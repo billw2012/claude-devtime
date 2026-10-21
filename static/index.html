@@ -83,6 +83,14 @@
       <div id="mon-sessions" class="table-wrap"></div>
     </div>
   </article>
+  <article class="card" id="own-card">
+    <header><h2>devtime's own usage</h2><span class="sub" id="own-sub"></span></header>
+    <p class="note">What devtime itself costs in this range: the <code>/devtime:start</code> loop (including its
+      <code>tick</code> passes), the <code>labeller</code> and <code>reviewer</code> subagents, and the other devtime
+      skills (setup, optimize, A/B). Already included in every total above; only the names of devtime's skills and
+      agents are matched, never any prompt text.</p>
+    <div id="own-cats" class="table-wrap"></div>
+  </article>
   <article class="card">
     <header><h2>Model experiments</h2><span class="sub" id="exp-sub"></span></header>
     <p class="note">Implementation A/B: stages whose subagent description starts <code>AB:&lt;stage&gt;</code>, the arm

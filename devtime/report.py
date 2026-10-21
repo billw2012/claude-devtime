@@ -54,6 +54,10 @@ def report(data, top=15, since=None):
               f"  {100 * (t['share'] or 0):.1f} % of cost")
         for r in mon["byTag"]:
             print(f"  {r['tag']:28s} {r['wakes']:5d} wakes  ${r['cost']:8.2f}  ${(r['avgPerWake'] or 0):.3f}/wake")
+    mine = overview.own_usage(data, overview.Index(data), since or 0, float("inf"), cost)
+    if mine["requests"]:
+        split = ", ".join(f"{k} ${v:,.2f}" for k, v in mine["byCategory"].items() if v)
+        print(f"\ndevtime's own usage: ${mine['cost']:,.2f} ({100 * (mine['share'] or 0):.1f} % of cost; {split})")
     print(f"\nSlowest subagents (busy; top {top}):")
     ranked = sorted(subs, key=lambda t: -sum(v for k, v in per_t[t["idx"]].items() if k not in waiting))
     for t in ranked[:top]:

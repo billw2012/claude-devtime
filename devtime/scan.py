@@ -17,9 +17,9 @@ import pickle
 import re
 from concurrent.futures import ProcessPoolExecutor
 
-from . import orgs
+from . import orgs, own
 
-CACHE_VERSION = 8  # 7: FileState.org; 8: per-org instances, org tags of every transcript
+CACHE_VERSION = 9  # 7: FileState.org; 8: per-org instances, org tags of every transcript; 9: "cmd" events
 
 SHELL_TOOLS = ("Bash", "PowerShell")
 TASK_ID_RE = re.compile(r"<task-id>([^<\s]+)</task-id>")
@@ -260,6 +260,9 @@ class FileState:
                     trigger = "peer"
                 if trigger:
                     self.events.append(("tg", ts, trigger))
+                cmd = own.command_name(text) if trigger == "human" else None
+                if cmd:  # only the name of a devtime skill, never the text around it
+                    self.events.append(("cmd", ts, cmd))
                 if not r.get("isMeta") or okind:
                     self.events.append(("u", ts, okind or ("human" if not r.get("isMeta") else "meta")))
             self.prev_ts = ts

@@ -24,12 +24,13 @@ import os
 import re
 import time
 
-from . import orgs, unreal
+from . import orgs, own, unreal
 
 HOUR = 3600.0
 _RIDS = {}  # path -> (offset, {request id: time}): request ids per transcript, for fork / copy de-duplication
-ROWS_VERSION = 5  # bump when _rows changes, so cached rows are rebuilt
+ROWS_VERSION = 6  # bump when _rows changes, so cached rows are rebuilt
 F_BACKGROUND, F_ERROR, F_UNFINISHED, F_NOSHARE, F_LAUNCH, F_WAIT, F_WAKE = 1, 2, 4, 8, 16, 32, 64
+F_OWN = 128  # model requests that are devtime's own usage (devtime.own): F_OWN << index of the category
 SCRIPT_IN_CMD = re.compile(r"([\w.-]+\.py)\b")
 GENERIC_BRANCHES = re.compile(r"^(main|master|HEAD|develop|claude/.*)$")
 
@@ -117,7 +118,7 @@ class Builder:
             sub_ends = tuple(sorted(session_ends.get((d["folder"], d["session"]), ()))) if d["role"] == "main" else ()
             cut = cuts.get(d["path"])
             key = (ROWS_VERSION, st.offset, st.last_ts, stamp, t["project"], t["title"], t["description"],
-                   self.idle_gap, sub_ends, cut)
+                   self.idle_gap, sub_ends, cut, t["agentType"])
             if cut is not None:
                 t["start"] = min(max(t["start"], cut), t["end"])
                 t["copiedUntil"] = cut
@@ -242,6 +243,8 @@ class Builder:
         compactions = []
         triggers = []  # (time, what woke the session): human prompts, peer messages, task notifications
         stops = {}  # background task id -> TaskStop time
+        marks = []  # (time, order, what): devtime skill turns, see own_states
+        agent_own = own.agent_category(t.get("agentType"))
         for e in events:
             tag = e[0]
             if tag == "a":
@@ -265,6 +268,8 @@ class Builder:
                     stops.setdefault(e[7], e[1])
                 if e[3] == "ScheduleWakeup":
                     wakeups.append(e[1])
+                if e[3] == "Skill" and own.skill_category(e[5]):
+                    marks.append((e[1], 1, "skill", own.skill_category(e[5])))
             elif tag == "tr":
                 if e[2] not in results:
                     results[e[2]] = e
@@ -278,6 +283,10 @@ class Builder:
                 prompts.append(e[1])
                 if e[2] == "human":
                     humans.append(e[1])
+                if e[2] not in ("task-notification", "peer"):
+                    marks.append((e[1], 0, "prompt", None))
+            elif tag == "cmd":
+                marks.append((e[1], 1, "cmd", own.skill_category(e[2])))
             elif tag == "cb":
                 compactions.append(e)
             elif tag == "tg":
@@ -334,6 +343,7 @@ class Builder:
                 hint = found[0] if found else "(no script)"
             ivs.append([ts, max(end, ts), kind, label, flags, branch, name, hint])
         trigger_ts = [x[0] for x in triggers]  # events are sorted by time
+        own_ts, own_cat = own_states(marks)
         woken = set()
         for rid, (start, end, model, think_ms, branch, mids, first_ts) in sorted(requests.items(),
                                                                                   key=lambda kv: kv[1][6]):
@@ -351,6 +361,12 @@ class Builder:
                     for i in range(6):
                         tok[i] += u[i]
             info = (model, tok, think_ms) if model != "<synthetic>" else None  # harness-made placeholder messages
+            category = agent_own
+            if category is None and own_ts:
+                j = bisect.bisect_left(own_ts, first_ts) - 1
+                category = own_cat[j] if j >= 0 else None
+            if category:
+                wake |= F_OWN << own.CATEGORIES.index(category)
             ivs.append([min(start, end), end, "model", trigger, wake, branch, "", info])
         for _, ts, dur, trigger in compactions:
             ivs.append([max(first, ts - dur), ts, "compaction", trigger or "", 0, "", "", None])
@@ -587,12 +603,29 @@ class Builder:
             "models": self.models.items, "transcripts": transcripts, "iv": self.iv, "tok": self.tok,
             "hours": self.hours, "flags": {"background": F_BACKGROUND, "error": F_ERROR, "unfinished": F_UNFINISHED,
                                            "noshare": F_NOSHARE, "launch": F_LAUNCH, "wait": F_WAIT,
-                                           "wake": F_WAKE},
+                                           "wake": F_WAKE, "own": F_OWN},
+            "ownCategories": list(own.CATEGORIES),
             "launchScripts": {str(n): s for n, s in self.launch_scripts.items()},
         }
 
 
 SHELL_TOOLS = ("Bash", "PowerShell")
+
+
+def own_states(marks):
+    """(times, categories): the devtime category (or None) in force from each mark on. A user prompt ends it; a
+    devtime slash command sets it; a devtime Skill call sets it only if no category is in force (the turn the user
+    started stays what it was)."""
+    times, cats = [], []
+    state = None
+    for ts, _, what, cat in sorted(marks, key=lambda m: (m[0], m[1])):
+        if what == "prompt":
+            state = None
+        elif what == "cmd" or state is None:
+            state = cat
+        times.append(ts)
+        cats.append(state)
+    return times, cats
 
 
 def output_mtime(path, start):

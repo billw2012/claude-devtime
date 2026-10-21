@@ -21,7 +21,7 @@ import statistics
 import time
 import tomllib
 
-from . import fit as fitting, orgs, paths
+from . import fit as fitting, orgs, own, paths
 
 RANGES = {"1h": 3600, "6h": 6 * 3600, "12h": 12 * 3600, "24h": 86400, "7d": 7 * 86400, "30d": 30 * 86400}
 COMMIT = re.compile(r"^\s*(commit|git commit)\b|\bgit\b(\s+-C\s+\S+)?\s+(add\b[^\n]*&&\s*git\b[^\n]*\s)?commit\b"
@@ -33,6 +33,7 @@ CHURN_GAP = 300  # a subagent's prompt cache lives 5 minutes
 CHURN_MIN_TOKENS = 50_000
 BIG_CONTEXT = 300_000
 LIVE_S = 600
+TICK_DAYS = 7  # the window of tick_summary's devtime usage
 # editor-run findings that are plain waste; python stalls / slow tests are often the work itself (headless builds)
 AVOIDABLE_EDITOR = {"throttled", "fixed wait", "check timeout", "slow startup"}
 
@@ -98,6 +99,16 @@ class Index:
         mon.sort(key=lambda r: r[0])
         self.monitor = mon
         self.monitor_starts = [r[0] for r in mon]
+        # devtime's own model requests (analyze.F_OWN flags): (start, category index, cost)
+        base = data["flags"].get("own", 0)
+        mine = []
+        for j, i in enumerate(tok["i"]):
+            bits = (iv["f"][i] // base) & 15 if base else 0
+            if bits:
+                mine.append((iv["s"][i], bits.bit_length() - 1, tok["cost"][j]))
+        mine.sort()
+        self.own = mine
+        self.own_starts = [r[0] for r in mine]
 
 
 def period(data, idx, lo, hi):
@@ -241,6 +252,28 @@ def monitoring(data, idx, lo, hi, cost=None, sessions=8):
         sess.append(finish(acc, session=label_of(trs[main]), tags={
             k: {"wakes": v[0], "cost": round(v[1], 4)} for k, v in sorted(session_tags[main].items(), key=lambda kv: -kv[1][1])}))
     return {"total": total, "byTag": tags, "bySession": sess}
+
+
+def window_cost(idx, lo, hi):
+    """Total cost of the requests that started in a window (what period() reports as cost, without the time sweep)."""
+    total = 0.0
+    for t, rows in idx.reqs.items():
+        st = idx.starts[t]
+        total += sum(r[1] for r in rows[bisect.bisect_left(st, lo):bisect.bisect_right(st, hi)])
+    return total
+
+
+def own_usage(data, idx, lo, hi, cost=None):
+    """devtime's own Claude usage in a window (see devtime.own): {cost, share of `cost`, requests, byCategory}. A
+    breakdown of the totals, not a part taken out of them."""
+    cats = data.get("ownCategories") or list(own.CATEGORIES)
+    rows = idx.own[bisect.bisect_left(idx.own_starts, lo):bisect.bisect_right(idx.own_starts, hi)]
+    by = [0.0] * len(cats)
+    for _, c, cost_ in rows:
+        by[c] += cost_
+    total = sum(by)
+    return {"cost": round(total, 4), "share": round(total / cost, 4) if cost else None, "requests": len(rows),
+            "byCategory": {name: round(by[i], 4) for i, name in enumerate(cats)}}
 
 
 def label_of(t):
@@ -1077,7 +1110,8 @@ def overview(data, idx, range_key, settings, week_cost=None, now=None, plan=None
             "week": {"cost": week_cost, "budget": budget, "share": week_cost / budget if budget else None},
             "live": live(data, idx, now), "spenders": spenders(data, cur), "trend": trend(data, idx, lo, hi),
             "experiments": experiments(data, idx, now), "limits": plan,
-            "monitoring": monitoring(data, idx, lo, hi, cur["cost"])}
+            "monitoring": monitoring(data, idx, lo, hi, cur["cost"]),
+            "devtime": own_usage(data, idx, lo, hi, cur["cost"])}
 
 
 def watch(data, idx, alerts, now, hours=3):
@@ -1127,5 +1161,8 @@ def tick_summary(data, settings, alerts, now):
     if samples:
         t, fh, sd = samples[-1][:3]
         reading = {"weekly": round(sd * 100, 1), "fiveHour": round(fh * 100, 1), "ageMin": round(max(0, now - t) / 60)}
+    idx = Index(data)
+    lo = now - TICK_DAYS * 86400
     return {"reading": reading, "labels": len(work_items(data, now, 8, 10 ** 6)["items"]),
-            "alerts": sum(1 for a in alerts if a.get("active"))}
+            "alerts": sum(1 for a in alerts if a.get("active")), "devtimeDays": TICK_DAYS,
+            "devtime": own_usage(data, idx, lo, now, window_cost(idx, lo, now))}

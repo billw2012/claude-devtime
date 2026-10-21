@@ -22,6 +22,9 @@ a step says so.
      `<!-- devtime:end -->`) to `~/.claude/CLAUDE.md`; it shows a diff and asks first, and the rest of the file is
      untouched. To undo, delete that block.
    - it may offer to remove duplicate devtime hook entries from `~/.claude/settings.json` (a `.bak` is kept);
+   - it asks whether to also set up support for running several sessions in parallel (the machine-wide slot queue and
+     agent budget rules; off by default, the recommended answer is no). Later, `/devtime:parallel` or asking Claude
+     turns it on or off;
    - it starts a dashboard server on `http://127.0.0.1:8765` and opens it, then starts a 30-minute loop in that
      session (keep the session open). Data is kept in `~/.claude/devtime/`; everything is local.
 

@@ -194,7 +194,7 @@ def check(data, config, now=None):
             add("untagged coding stage", 1, total, "is writing code without an AB:<stage> tag while this session "
                 "runs the model A/B")
         if not sub:
-            polls = [c for c in calls if now - 1800 <= c[0] <= now and c[1] not in ("git", "edit code")
+            polls = [c for c in calls if now - 1800 <= c[0] <= now and c[1] not in ("source control", "git", "edit code")
                      and POLL.search(c[2])]
             ctx = rows[-1][3]
             if len(polls) >= th["poll_count"] and ctx >= th["poll_context"]:

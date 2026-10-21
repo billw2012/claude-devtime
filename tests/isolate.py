@@ -18,3 +18,22 @@ os.environ["DEVTIME_DESKTOP_DIR"] = os.path.join(HOME, "Claude")
 os.environ["CLAUDE_CODE_ORGANIZATION_UUID"] = ORG
 os.environ["DEVTIME_NO_SERVER_START"] = "1"
 os.environ["DEVTIME_SLOTS_DIR"] = os.path.join(HOME, "slots")  # never the machine's real slot queue
+
+# Parallel support (slot queue, agent budget rules) is off by default; most tests exercise it, so the test home turns it
+# on. Tests of the default or of a switch use set_parallel() below.
+CONFIG_FILE = os.path.join(os.environ["DEVTIME_HOME"], "config", "devtime.toml")
+os.makedirs(os.path.dirname(CONFIG_FILE), exist_ok=True)
+with open(CONFIG_FILE, "w", encoding="utf-8") as _f:
+    _f.write("[settings]\nparallel = true\n")
+
+
+def set_parallel(text="parallel = true\n"):
+    """Replaces the test home's [settings] (text = its lines; None removes the file) and drops the settings cache."""
+    from devtime import config
+    if text is None:
+        if os.path.exists(CONFIG_FILE):
+            os.remove(CONFIG_FILE)
+    else:
+        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+            f.write("[settings]\n" + text)
+    config._USER_SETTINGS.clear()

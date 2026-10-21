@@ -61,7 +61,8 @@ open; a cheap model is fine for it.
 
 **`/devtime:optimize`** measures your last 7 days, ranks the catalogue of optimizations by estimated $/week
 (slim agent types, long jobs on a Haiku runner, hand-off past ~250k context, auto-compact window, scripts first,
-limited parallelism, background jobs instead of poll loops, ...), asks which to apply, shows a dry-run diff and applies
+limited parallelism, background jobs instead of poll loops, ...; the items that only matter for parallel work are
+offered once parallel support is on), asks which to apply, shows a dry-run diff and applies
 them to `~/.claude/CLAUDE.md` or `settings.json`. Each application is recorded as a marker on the weekly chart so the
 effect is visible, and `python -m devtime optimize remove <id>` undoes it.
 
@@ -70,8 +71,14 @@ effect is visible, and `python -m devtime optimize remove <id>` undoes it.
 when there are too few stages to call it), `/devtime:ab stop <id>` ends it and offers to apply the winner. Arms are
 assigned by hash, not by the orchestrating session, and a hook enforces them.
 
-**`/devtime:slots`** adopts the machine-wide slot queue in a project. Several sessions on one PC (say one per project,
-running autonomously) share the GPU, headless editor / test runs and builds through one FIFO queue per resource
+**`/devtime:parallel`** is the optional add-on for running several sessions (or autonomous pipelines) on one PC, and it
+is **off by default**. devtime has a base set that is always on: the dashboard, usage alerts, the optimizations and A/B
+experiments. Parallel support only adds to it, and never turns anything off: the machine-wide slot queue (below) and the
+agent budget rules (subagents are refused sleeps, poll loops and long blocking waits, and are asked to hand off past
+~250k tokens of context). Note that both also act in your interactive sessions on this PC: heavy commands there get
+queued too (interactive editors are exempt). `/devtime:start` asks once at first setup; later run `/devtime:parallel` or
+ask Claude to turn devtime parallel support on or off. It also adopts the slot queue in a project: several sessions
+(say one per project, running autonomously) share the GPU, headless editor / test runs and builds through one FIFO queue per resource
 (default `gpu`=2, `test`=3, `build`=2 at once; `quiet` = test+gpu exclusively). The plugin's hook queues any command
 that matches a rule in `~/.claude/devtime/config/slots.toml` by rewriting it to
 `python ~/.claude/devtime/devtime.py slot run <resource> -- <command>`. The rules ship covering UnrealEditor(-Cmd),
@@ -83,6 +90,7 @@ is optional: review or adjust learned rules and add ones learning can't see. A
 slot frees itself however its job ends (crash, kill, closed session, reboot), and the hook refuses loops that wait for
 another process or a lock file. `slot status` shows who holds what and who waits; the dashboard shows queue waits and
 alerts a session whose ticket waits over 20 min. `DEVTIME_SLOTS=0` turns the wrapping off.
+Without parallel support none of this is active (the slot queue and the agent budget hook rules stay off).
 
 ## Data and configuration
 

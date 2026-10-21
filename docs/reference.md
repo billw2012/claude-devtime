@@ -29,6 +29,8 @@ Run `/devtime:start` in Claude Code after installing. The first time it
   re-running replaces the block). The block asks sessions to call `get_usage` before launching agent stages, which is
   where the dashboard's plan readings come from, and to stop starting agents at the cap;
 - offers to remove duplicate hook entries from `settings.json` (e.g. from an earlier manual install; a `.bak` is kept);
+- asks whether to also set up parallel support (below; the recommended answer is no) and, via
+  `python -m devtime setup parallel on|off`, records the choice;
 - starts the dashboard server and opens it in the browser;
 - does a catch-up pass, then starts `/loop 30m /devtime:start tick` in the session.
 
@@ -46,6 +48,37 @@ due, active alerts, cap), and, only when there is something to judge, a small Ha
 The mechanical parts are `python -m devtime setup check | claude-md --cap N [--dry-run] | open`, `tick`,
 `review-context [--hours 2]` (under 5 KB: the 25 most expensive subagents, the last 12 review lines), `review-done --text ...` and `work-assign -` (JSON on stdin); `CLAUDE_CONFIG_DIR`
 overrides `~/.claude`, `DEVTIME_NO_SERVER_START=1` stops `tick` from starting a server.
+
+### Base set and parallel support
+
+devtime has a base set that is always on: the dashboard and server, usage alerts, optimizations, A/B experiments, the
+Unreal log findings. **Parallel support** is an optional add-on that only adds things; it never turns a base feature
+off. It is off by default and adds two hook features:
+
+- `slots`: the machine-wide slot queue's rewriting of matching commands into `slot run ...` and the refusal of
+  hand-rolled waits for other jobs (see "Slots" below), and the server's slot-rule learning watcher;
+- `agent_budget`: the subagent rules of `hooks/agent_budget.py` (refused sleeps / poll loops / long waits, the 250k
+  hand-off nudge).
+
+Both also act in your interactive sessions on this PC (heavy commands there get queued, interactive editors are
+exempt). What stays on without it: usage-alert delivery and A/B enforcement (they only act when you set them up), and
+`slot run ...` used explicitly. `DEVTIME_SLOTS=0` still bypasses the queue.
+
+Switch it with `/devtime:parallel` (or ask Claude); the skill runs `python -m devtime setup parallel [on|off]` (no
+argument: prints the state and the effective features; `setup check` reports it too). It writes `parallel = true|false`
+under `[settings]` in `~/.claude/devtime/config/devtime.toml`. To switch a single feature, add a table there:
+
+    [settings]
+    parallel = false
+    [settings.features]
+    slots = true          # overrides `parallel` for that feature (true or false)
+    agent_budget = false
+
+Optimization items that only make sense for parallel work (`requires = "parallel"` in the catalogue: hand-off past
+250k, at most 2-3 agents, the weekly cap) are offered by `/devtime:optimize` only when `parallel` is on (an installed one
+stays listed so it can be removed; `optimize apply <id>` always works). `autocompact-400k` and the rest are always
+offered. Needs Python 3.11+: on older Python the hooks and the launcher do nothing (the launcher prints an error and
+exits 1 so `slot run` is not lost silently).
 
 ### Cut usage: `/devtime:optimize`
 
@@ -193,13 +226,15 @@ finds `python3` / `python`.
   through until one of the agent's calls has actually run over 4 min, then refuses further ones; the reason tells the
   agent to hand the job back to the main session and end. Past 250k tokens of context (then every 150k) it tells the
   agent to finish its step and hand off. ~0.1 s per call. Limits: `DEVTIME_AGENT_WAIT_LIMIT`, `_WAIT_BUDGET`,
-  `_CONTEXT_NUDGE`. Also (main sessions too) enforces the arms of active `/devtime:ab` experiments on Agent / Task launches,
-  and queues heavy commands for machine-wide slots (see "Slots" below).
+  `_CONTEXT_NUDGE`. These subagent rules and the slot queue are parallel support: active only when `parallel` is on
+  (see "Base set and parallel support"). Always (main sessions too): usage-alert delivery and the arms of active
+  `/devtime:ab` experiments on Agent / Task launches. With parallel support it also queues heavy commands for
+  machine-wide slots (see "Slots" below).
 
 ## Slots: a machine-wide queue for heavy jobs
 
-`devtime/slots.py` (runtime), `devtime/slotrules.py` (configuration, rules, the hook's rewrite), `/devtime:slots`
-(adopt in a project). One FIFO queue per resource, shared by every Claude Code session on the PC, whatever its
+`devtime/slots.py` (runtime), `devtime/slotrules.py` (configuration, rules, the hook's rewrite), `/devtime:parallel`
+(turn parallel support on / off, adopt in a project). One FIFO queue per resource, shared by every Claude Code session on the PC, whatever its
 project or organisation (on purpose: they share the machine). Nothing in the code is project-specific; projects only
 add rules.
 
@@ -360,7 +395,8 @@ chained from request times and re-anchored where the reported 5-hour share drops
 Exact readings also come from the `get_usage` calls that sessions already make: the dashboard picks them out of the Claude
 Code transcripts (main and subagent, last 9 days; only the percentages and reset times are kept, cached in
 `~/.claude/devtime/cache/usage_harvest.json`), so no scheduled polling is required.
-**Throughput** shows commits and finished subagents per bucket for the selected range.
+**Throughput** shows commits and finished subagents per bucket for the selected range. A commit is a `git commit`, `p4 submit`, `svn commit` / `ci` or `hg commit` call (the shell kind
+"source control" covers git, gh, p4, svn and hg).
 
 **Shares instead of dollars.** `limits.allowance` (also `limits.budget`) in `/api/overview` is the fitted API-equivalent
 dollars per 100 % of the week, `limits.allowanceError` its uncertainty (one standard error, dollars). Wherever an allowance

@@ -13,6 +13,14 @@ desktop_session_dirs = ["~/AppData/Roaming/Claude/claude-code-sessions"]
 idle_gap_s = 30           # uncovered gaps longer than this are idle / waiting; shorter ones are harness overhead
 host = "127.0.0.1"
 port = 8765
+# Extended support for several sessions / autonomous pipelines in parallel on this PC (set with `python -m devtime setup
+# parallel on|off`): adds the machine-wide slot queue and the agent budget rules; it never turns anything else off. Note
+# these also act in interactive sessions on this PC (e.g. heavy commands there get queued too).
+parallel = false
+# Per-feature overrides of `parallel` (put them in your own <data dir>/config/devtime.toml):
+# [settings.features]
+# slots = true          # queue heavy jobs (builds, editor runs, tests) machine-wide, deny hand-rolled waits for them
+# agent_budget = true   # subagents may not wait on slow jobs; asked to hand off past 250k tokens of context
 # Organisations: every org gets its own devtime instance (cache, server, port); a transcript's org is its credential_org
 # record, else the desktop app's session index, else its parent's.
 # include_unknown_org = false   # true also counts old transcripts whose org can't be determined, in every org's instance
@@ -97,8 +105,8 @@ Artifact = "publish / docs"
 #   text  - regex (case-insensitive) on a shell call's description + command, or an MCP call's main input fields
 # Shell calls that match nothing become "shell other"; MCP calls become "mcp: <server>".
 [[rules]]
-kind = "git"
-text = '^\s*(cd [^&;\n]+(&&|;)\s*)?git\b|\bgit (commit|push|pull|merge|rebase|status|diff|log|lfs|worktree|checkout|stash|fetch)\b|\bgh (pr|repo|api|issue|run)\b'
+kind = "source control"  # git / GitHub, Perforce, Subversion, Mercurial
+text = '^\s*(cd [^&;\n]+(&&|;)\s*)?git\b|\bgit (commit|push|pull|merge|rebase|status|diff|log|lfs|worktree|checkout|stash|fetch)\b|\bgh (pr|repo|api|issue|run)\b|\bp4(\.exe)?\s+(-\w+\s+\S+\s+)*(edit|add|delete|submit|shelve|unshelve|reconcile|revert|sync|opened|changes?|describe|diff|status|resolve|integrate|move|login|info|where|fstat)\b|\bsvn\b|\bhg\b'
 
 [[rules]]
 kind = "downloads"

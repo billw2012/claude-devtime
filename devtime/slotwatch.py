@@ -31,7 +31,7 @@ import sys
 import time
 from struct import error as struct_error
 
-from . import slotrules
+from . import config as config_mod, slotrules
 
 NT = os.name == "nt"
 SHELLS = {"bash", "sh", "zsh", "dash", "ksh", "pwsh", "powershell", "cmd"}
@@ -815,6 +815,9 @@ def run_forever(say=None, stop=None, table=None):
     wait = stop.wait if stop else time.sleep
     fd, watcher = None, None
     while not (stop and stop.is_set()):
+        if not config_mod.feature("slots"):  # no parallel support: no queue, so nothing to learn (checked again each round)
+            wait(30)
+            continue
         cfg = slotrules.config()
         if fd is None:
             fd = take_lock(cfg.lock_dir())

@@ -115,10 +115,14 @@ LAUNCHER = '''"""Stable entry point for DevTime (written by the plugin at sessio
     python devtime.py <args>      same as `python -m devtime <args>` with the plugin root in plugin_root.txt, run in
                                   this process and in the caller's working directory (`slot run` needs both)
 """
+import sys
+
+if sys.version_info < (3, 11):  # the plugin needs 3.11+ (tomllib); don't lose the caller's command silently
+    sys.exit("devtime needs Python 3.11 or newer (this is %d.%d); run it with a newer python" % sys.version_info[:2])
+
 import json
 import os
 import re
-import sys
 
 
 def version(root):

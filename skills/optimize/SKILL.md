@@ -24,7 +24,10 @@ If the user asks what devtime installed, or to remove / undo some or all of it, 
    For an applied item the estimate is what is still being lost. Other keys are the metrics behind it: `byModel`,
    `byRole`, `baseCtxByType` (fixed context per agent type), `big` (cost share above 250k / 400k context),
    `waiting` (subagent wait hours, cache re-writes), `readonlyBig`, `opusCoding`, `concurrent`, `recurringFailures`.
-2. `python -m devtime optimize list` for each item's title and one-line reason.
+2. `python -m devtime optimize list` for each item's title and one-line reason. Items that need parallel support
+   (`requires = "parallel"`: hand-off past 250k, at most 2-3 agents, the weekly cap) are left out of `analyze` and
+   `list` unless parallel support is on (`python -m devtime setup parallel`) or they are already installed; mention
+   `/devtime:parallel` once if the user runs several sessions at once. The other items are always offered.
 
 ## 2. Present
 

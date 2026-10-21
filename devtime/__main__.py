@@ -17,7 +17,7 @@
                                                          delivered to it like a usage alert
     python -m devtime work-items [--days 8] [--max 250]  unlabelled pieces of work and the existing section names
                                                          (JSON), for the scheduled section labeller
-    python -m devtime setup check | claude-md --cap N [--dry-run] | open
+    python -m devtime setup check | claude-md --cap N [--dry-run] | open | parallel [on|off]
                                                          what /devtime:start does mechanically (devtime/setup.py)
     python -m devtime analyze [--days 7]                compact JSON of usage metrics and the ranked optimization catalogue
     python -m devtime optimize list | apply ID [--dry-run] | remove ID|all [--dry-run] | adopt ID --heading H | --setting env.KEY [--dry-run]
@@ -50,8 +50,8 @@ from . import paths
 
 Store = None  # devtime.store.Store, imported by run()
 
-NO_ORG_OK = {"org", "mark", "setup:claude-md", "ab:new", "ab:arm", "ab:stop", "ab:list", "optimize:list",
-             "optimize:apply", "optimize:remove", "optimize:adopt", None}
+NO_ORG_OK = {"org", "mark", "setup:claude-md", "setup:parallel", "ab:new", "ab:arm", "ab:stop", "ab:list",
+             "optimize:list", "optimize:apply", "optimize:remove", "optimize:adopt", None}
 
 
 def main(argv=None):
@@ -131,6 +131,8 @@ def run(argv=None):
     q.add_argument("--five-hour-cap", type=float, help="5-hour cap, percent of the 5-hour limit (omit for none)")
     q.add_argument("--dry-run", action="store_true")
     ssub.add_parser("open")
+    q = ssub.add_parser("parallel")
+    q.add_argument("value", nargs="?", choices=("on", "off"), help="omit to show the current state")
     p = sub.add_parser("analyze")
     p.add_argument("--days", type=float, default=7)
     p = sub.add_parser("optimize")

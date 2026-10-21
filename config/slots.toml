@@ -2,7 +2,7 @@
 # every Claude Code session on this PC, whatever its project or organisation. Reference: docs/reference.md "Slots".
 #
 # These are the shipped defaults. Change or extend them in <data dir>/config/slots.toml (~/.claude/devtime/config/
-# slots.toml), never here: tables merge key by key and your [[rule]]s are checked before these. `/devtime:slots` writes
+# slots.toml), never here: tables merge key by key and your [[rule]]s are checked before these. `/devtime:parallel` writes
 # project rules there for you; `python ~/.claude/devtime/devtime.py slot rules` lists what is in force.
 
 [settings]
@@ -82,7 +82,7 @@ resource = "gpu"
 name = '''^(UnrealBuildTool|AutomationTool)(\.exe)?$'''
 resource = "build"
 
-# Project rules (written by /devtime:slots into the user file), e.g.:
+# Project rules (written by /devtime:parallel into the user file), e.g.:
 # [[rule]]
 # match = '''Tools/Dev/capture_.*\.sh'''
 # resource = "gpu"

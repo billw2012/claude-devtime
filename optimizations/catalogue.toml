@@ -6,6 +6,8 @@
 #   claude_md     text            a block between <!-- devtime:opt:<id> --> and <!-- devtime:opt-end:<id> --> in CLAUDE.md
 #   settings_env  key, value      an entry of "env" in settings.json
 #   note          text            a manual step; nothing is written
+# requires = "parallel" (optional): only offered when settings.parallel is on (default: always); apply / remove by id
+# always work, and an installed item stays listed.
 # The plugin ships the agent types devtime:coder, devtime:reader and devtime:runner (agents/).
 
 [[opt]]
@@ -54,6 +56,7 @@ text = """## Read-only work
 
 [[opt]]
 id = "handoff-250k"
+requires = "parallel"
 guard = true
 title = "Short-lived subagents: one stage each, hand off past ~250k context"
 summary = "A long-lived agent re-reads its whole context on every call; a fresh agent from a short handoff is cheaper."
@@ -97,6 +100,7 @@ text = """## Scripts first
 
 [[opt]]
 id = "parallelism"
+requires = "parallel"
 guard = true
 title = "At most 2-3 agents at once"
 summary = "Many agents in parallel burn the plan's limits faster and pile up cache re-writes, with little extra throughput."
@@ -124,6 +128,7 @@ text = """## Model choice
 
 [[opt]]
 id = "weekly-cap"
+requires = "parallel"
 title = "Weekly usage cap"
 summary = "Sessions call get_usage before launching agents and stop starting new ones at the cap, so the week never ends in a hard stop."
 signal = "whether the /devtime:start CLAUDE.md block exists"

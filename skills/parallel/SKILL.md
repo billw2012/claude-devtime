@@ -1,14 +1,33 @@
 ---
-name: slots
-description: Review and adjust the machine-wide slot queue (devtime slots) for the current project - rules for its scripts are learned automatically; this optionally reviews the learned ones, adds rules learning can't see (jobs that start no watched program, long test suites), and retires hand-rolled locks. Also explains `slot status`. Use when the user runs /devtime:slots, asks how sessions should share the GPU / editor / builds, or asks what is queued or holding a slot.
+name: parallel
+description: Manage devtime's optional parallel support - turn it on or off, see what it adds (the machine-wide slot queue for heavy jobs and the agent budget rules), review and adjust the slot rules for the current project, explain `slot status`, and explain agent budget refusals and hand-off nudges. Use when the user runs /devtime:parallel, plans to run several sessions or autonomous pipelines in parallel, wants sessions to share the GPU / editor / builds, asks what is queued or holding a slot, or asks to turn devtime parallel support on or off.
 ---
 
-# devtime slots
+# devtime parallel
 
-Run every command as `python "<data dir>/devtime.py" slot ...` with the launcher path from
-`cd "${CLAUDE_PLUGIN_ROOT}" && python -m devtime org` (`dataDir` + `/devtime.py`; usually `~/.claude/devtime/devtime.py`).
-If the literal text `${CLAUDE_PLUGIN_ROOT}` was not substituted, the plugin root is two levels above this skill's base
-directory. Keep replies short.
+Run every command as `cd "${CLAUDE_PLUGIN_ROOT}" && python -m devtime ...`, or `python "<data dir>/devtime.py" slot ...`
+for the `slot` commands, with the launcher path from `cd "${CLAUDE_PLUGIN_ROOT}" && python -m devtime org` (`dataDir` +
+`/devtime.py`; usually `~/.claude/devtime/devtime.py`). If the literal text `${CLAUDE_PLUGIN_ROOT}` was not
+substituted, the plugin root is two levels above this skill's base directory. Keep replies short.
+
+## First: is parallel support on?
+Run `python -m devtime setup parallel` (JSON: `parallel`, and `features` = what is effectively on).
+Parallel support is an optional add-on that only adds to devtime's always-on base set (dashboard, alerts,
+optimizations, A/B): the **slot queue** (`slots`) and the **agent budget rules** (`agent_budget`). Both also act in
+interactive sessions on this PC: heavy commands there get queued (interactive editors are exempt), and subagents are
+refused sleeps / poll loops / long blocking waits (each refusal says to hand the job back to the main session and
+end) and are asked to hand off past 250k tokens of context.
+
+- Args `on` / `off`, or the user asks to turn it on or off: say in one sentence what changes, confirm with the user,
+  then `python -m devtime setup parallel on` (or `off`). It takes effect from the next tool call; tell the user a
+  single feature can be forced with `features.slots` / `features.agent_budget` under `[settings.features]` in
+  `~/.claude/devtime/config/devtime.toml`. Then stop (after `on`, offer the project review below).
+- If `features.slots` is false: say parallel support (or slots) is off and offer `setup parallel on` (or
+  `features.slots = true`) **before anything else**; without it the rules below do nothing. Review the rules only if
+  the user wants them prepared anyway.
+- Args `agent budget` / the user asks about a refusal or hand-off nudge: explain the hook (limits 4 min per wait,
+  10 min of waits per subagent, nudge at 250k context; the `runner` agent type is exempt; main sessions are never
+  refused) and what to do instead (background the job, let the main session or a `devtime:runner` wait). Then stop.
 
 ## What it is (tell the user in two or three sentences, first run only)
 One FIFO queue per resource (default `gpu`=2, `test`=3, `build`=2 at once; group `quiet` = test+gpu exclusively),

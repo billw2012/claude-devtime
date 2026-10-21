@@ -30,14 +30,22 @@ through hooks/run.sh so the right Python is found.
    active experiment in <data dir>/config/experiments.toml must use the model and agent type of the arm the stage's
    hash gives; otherwise it is denied with the right arm. Unknown or stopped experiments pass. Runs in main sessions too.
 
-Never fails a call: any error inside the hook lets the call through.
+Features 1, 2 and 5 are parallel support, off by default: on with settings.parallel = true (or settings.features.slots /
+settings.features.agent_budget) in the user's devtime.toml, `python -m devtime setup parallel on`. Without it the hook
+only delivers usage alerts and enforces A/B experiments, which act only when the user set them up.
+
+Never fails a call: any error inside the hook lets the call through. Exits silently on Python older than 3.11.
 """
+
+import sys
+
+if sys.version_info < (3, 11):  # devtime needs tomllib; a hook must never get in the way
+    sys.exit(0)
 
 import glob
 import json
 import os
 import re
-import sys
 import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -47,6 +55,15 @@ from devtime import paths  # noqa: E402  (stdlib only, no heavy imports: this ru
 STATE_DIR = os.path.join(paths.CACHE, "agent_budget")
 ALERTS = os.path.join(paths.CACHE, "alerts.json")
 ALERT_FRESH_S = 1800  # an alert last seen longer ago than this is not delivered any more
+
+
+def on(name):
+    """Whether the feature ("slots", "agent_budget") is on (devtime/config.py: off unless settings.parallel or overridden)."""
+    try:
+        from devtime import config
+        return config.feature(name)
+    except Exception:
+        return False
 
 
 def dashboard():
@@ -306,6 +323,8 @@ def slot_check(data):
     if (data.get("hook_event_name") or "PreToolUse") != "PreToolUse" or data.get("tool_name") not in ("Bash",
                                                                                                     "PowerShell"):
         return None
+    if not on("slots"):
+        return None
     try:
         from devtime import slotrules
         result = slotrules.hook_check(data["tool_name"], data.get("tool_input") or {}, data.get("cwd"),
@@ -354,6 +373,12 @@ def budget(data):
     tool = data.get("tool_name") or ""
     inp = data.get("tool_input") or {}
     state = load_state(agent_id)
+    if not on("agent_budget"):  # no parallel support: no wait refusals, no handoff nudge; alerts only
+        if event != "PreToolUse":
+            return None
+        out = with_alerts(None, pending_alerts(data.get("session_id"), agent_id, state), agent_id, event)
+        save_state(agent_id, state)
+        return out
     path = agent_transcript(data.get("transcript_path"), data.get("session_id"), agent_id)
     ctx = context_tokens(path) if path else 0
     waiter = data.get("agent_type") in WAITERS or is_runner(path)

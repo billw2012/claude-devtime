@@ -28,7 +28,7 @@ import statistics
 import time
 import tomllib
 
-from . import paths, setup
+from . import config, paths, setup
 
 ROOT = setup.ROOT
 CATALOGUE = os.path.join(ROOT, "optimizations", "catalogue.toml")
@@ -57,6 +57,11 @@ def load_catalogue(path=CATALOGUE):
             if a.get("kind") not in ("claude_md", "settings_env", "note"):
                 raise ValueError("catalogue item %s: unknown action kind %r" % (item["id"], a.get("kind")))
     return items
+
+
+def offered(item):
+    """Catalogue items with `requires = "parallel"` only make sense with parallel support on (settings.parallel)."""
+    return item.get("requires") != "parallel" or config.parallel()
 
 
 def find_item(items, item_id):
@@ -477,6 +482,8 @@ def list_cmd():
         entry = ledger_entry(ledger, item["id"])
         if state == "devtime" and entry and entry.get("adopted"):
             state = "adopted"
+        if not offered(item) and not state:  # needs parallel support; still listed while installed, so it can be removed
+            continue
         rows.append((item, state, item["title"], item["summary"]))
     known = {i["id"] for i in items}
     for m in ANY_OPT_RE.finditer(claude_md or ""):
@@ -725,6 +732,8 @@ def analyze(days=7.0, now=None, store=None):
     items = []
     for item in load_catalogue():
         state = applied_state(item, claude_md, settings)
+        if not offered(item) and not state:
+            continue
         usd, why = est.get(item["id"], (None, ""))
         items.append({"id": item["id"], "applied": state is not None and state != "partly", "by": state,
                       "estWeeklyUsd": usd, "why": why, "guard": bool(item.get("guard"))})

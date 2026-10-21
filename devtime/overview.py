@@ -24,8 +24,10 @@ import tomllib
 from . import fit as fitting, orgs, paths
 
 RANGES = {"1h": 3600, "6h": 6 * 3600, "12h": 12 * 3600, "24h": 86400, "7d": 7 * 86400, "30d": 30 * 86400}
-COMMIT = re.compile(r"^\s*(commit|git commit)\b|\bgit\b(\s+-C\s+\S+)?\s+(add\b[^\n]*&&\s*git\b[^\n]*\s)?commit\b",
+COMMIT = re.compile(r"^\s*(commit|git commit)\b|\bgit\b(\s+-C\s+\S+)?\s+(add\b[^\n]*&&\s*git\b[^\n]*\s)?commit\b"
+                    r"|\bp4(?:\.exe)?\s+(?:-\w+(?:\s+[^-\s]\S*)?\s+)*submit\b|\bsvn\s+(?:commit|ci)\b|\bhg\s+commit\b",
                     re.IGNORECASE)
+SOURCE_CONTROL = ("source control", "git")  # the kind of version-control calls ("git" in caches from before 0.7.0)
 NOT_COMMIT = re.compile(r"\b(verify|check|inspect|show|log|status|diff|stats?)\b", re.IGNORECASE)
 CHURN_GAP = 300  # a subagent's prompt cache lives 5 minutes
 CHURN_MIN_TOKENS = 50_000
@@ -73,8 +75,8 @@ class Index:
         for ids in self.by_t.values():
             ids.sort(key=lambda i: iv["s"][i])
         labels = data["labels"]
-        git = data["kinds"].index("git") if "git" in data["kinds"] else -1
-        hits = [i for i in range(len(iv["t"])) if iv["k"][i] == git
+        scm = {data["kinds"].index(k) for k in SOURCE_CONTROL if k in data["kinds"]}
+        hits = [i for i in range(len(iv["t"])) if iv["k"][i] in scm
                 and COMMIT.search(labels[iv["l"][i]]) and not NOT_COMMIT.search(labels[iv["l"][i]])]
         self.commits = sorted(iv["s"][i] for i in hits)
         self.commits_by_t = collections.Counter(iv["t"][i] for i in hits)

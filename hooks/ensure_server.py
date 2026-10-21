@@ -13,9 +13,13 @@ Also records the plugin root and a launcher in the data dir (paths.install_launc
 review all need the server.
 """
 
+import sys
+
+if sys.version_info < (3, 11):  # devtime needs 3.11+ (tomllib): do nothing, silently
+    sys.exit(0)
+
 import os
 import subprocess
-import sys
 import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

@@ -80,7 +80,7 @@ function renderTiles(o) {
     tile(hasAllowance() ? "Cost (% of week)" : "Cost", cost(c.cost), `${cost(c.costPerHour)}/h · subagents ${pct(share(c.subCost, c.cost))} · Opus ${pct(share(c.opusCost, c.cost))}`,
       `Estimated API-equivalent cost of every request in the range (token counts × config pricing)${hasAllowance() ? `: ${money(c.cost)}, ${money(c.costPerHour)}/h. Shown as a share of the weekly limit (allowance ~${money(S.allowance)}).` : "."}`,
       c.costPerHour, p.costPerHour, "down"),
-    tile(hasAllowance() ? "Per commit (% of week)" : "Cost per commit", cost(c.costPerCommit), `${c.commits} commits (from git calls, approx.)`,
+    tile(hasAllowance() ? "Per commit (% of week)" : "Cost per commit", cost(c.costPerCommit), `${c.commits} commits / submits (from git, p4, svn, hg calls, approx.)`,
       `Cost divided by the commits agents made in the range: a rough cost of one unit of finished work${hasAllowance() && c.costPerCommit != null ? ` (${money(c.costPerCommit)})` : ""}.`,
       c.costPerCommit, p.costPerCommit, "down"),
     tile("Avoidable: cache churn", cost(c.churn), `${pct(share(c.churn, c.cost))} of cost · subagents re-writing their cache after waits`,
@@ -103,7 +103,7 @@ function renderTiles(o) {
   const topKinds = kinds.slice(0, 3).map(([k, v]) => `${k} ${pct(v / agentTot)}`).join(" · ");
   const range = c.hi - c.lo;
   $("#perf").replaceChildren(
-    tile("Commits / hour", c.commitsPerHour.toFixed(c.commitsPerHour >= 10 ? 0 : 1), `${c.commits} in ${dur(range)}`,
+    tile("Commits / submits per hour", c.commitsPerHour.toFixed(c.commitsPerHour >= 10 ? 0 : 1), `${c.commits} in ${dur(range)}`,
       "Commits agents made per hour of the range: a throughput proxy.", c.commitsPerHour, p.commitsPerHour, "up"),
     tile("Working", pct(c.busyShare), `${c.parallel.toFixed(1)}× agents in parallel while working`,
       "Share of the range when at least one session or agent was doing something (not waiting or idle), and how many at once on average.",

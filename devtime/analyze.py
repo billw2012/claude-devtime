@@ -297,7 +297,7 @@ class Builder:
             kind = cfg.classify(project, name, text)
             res = results.get(tid)
             flags = 0
-            if (self.launch_re is not None and name in SHELL_TOOLS and kind not in ("read/search code", "git")
+            if (self.launch_re is not None and name in SHELL_TOOLS and kind not in ("read/search code", "source control", "git")
                     and self.launch_re.search(text)):
                 flags |= F_LAUNCH  # may have started an Unreal Editor run
             elif self.wait_re is not None and name in SHELL_TOOLS and self.wait_re.search(text.split("\n", 1)[-1]):

@@ -3,6 +3,8 @@
     setup check                       python, server, recent projects, CLAUDE.md block, duplicate hooks, env, data dir
     setup claude-md --cap N [--dry-run]   insert / replace the devtime block in <claude dir>/CLAUDE.md
     setup open                        start the server if needed, open the dashboard in the browser
+    setup parallel [on|off]           show / set parallel support (settings.parallel in the user's devtime.toml):
+                                      the machine-wide slot queue and the agent budget rules
 
 <claude dir> is CLAUDE_CONFIG_DIR if set, else ~/.claude.
 """
@@ -16,7 +18,7 @@ import sys
 import time
 import webbrowser
 
-from . import paths
+from . import config, paths
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 START = "<!-- devtime:start -->"
@@ -190,6 +192,8 @@ def check(projects=True):
     env = (settings or {}).get("env") or {}
     out = {
         "python": "%d.%d.%d" % sys.version_info[:3], "pythonOk": sys.version_info >= (3, 11),
+        "pythonRequired": "3.11+ (older Python: the hooks and the launcher do nothing)",
+        **parallel_state(),
         "server": {"url": "http://%s:%d/" % (hooks.HOST, number), "answering": hooks.ours(number)},
         "claudeDir": claude_dir(),
         "claudeMd": {"path": claude_md_path(), "exists": text is not None, "block": m is not None,
@@ -208,6 +212,45 @@ def check(projects=True):
             out["projects7d"] = {"error": repr(error)}
     print(json.dumps(out, separators=(",", ":")))
     return out
+
+
+def parallel_state():
+    """Whether parallel support is on and which features are effectively on."""
+    return {"parallel": config.parallel(), "features": {name: config.feature(name) for name in config.FEATURES}}
+
+
+def set_parallel_text(text, value):
+    """The user's devtime.toml text with settings.parallel = value: the existing line replaced, else added under
+    [settings] (created if missing); everything else, and the file's line ending, kept."""
+    text = text or ""
+    eol = "\r\n" if "\r\n" in text else "\n"
+    line = "parallel = %s" % ("true" if value else "false")
+    lines = text.split(eol) if text else []
+    start = next((i for i, l in enumerate(lines) if re.match(r"^\s*\[settings\]\s*(#.*)?$", l)), None)
+    if start is None:
+        return (text.rstrip("\r\n") + eol + eol if text.strip() else "") + "[settings]" + eol + line + eol
+    end = next((i for i in range(start + 1, len(lines)) if re.match(r"^\s*\[", lines[i])), len(lines))
+    for i in range(start + 1, end):
+        if re.match(r"^\s*parallel\s*=", lines[i]):
+            lines[i] = line
+            return eol.join(lines)
+    lines.insert(start + 1, line)
+    return eol.join(lines)
+
+
+def parallel_cmd(value=None):
+    path = os.path.join(paths.USER_CONFIG, "devtime.toml")
+    if value:
+        old = read_text(path)
+        new = set_parallel_text(old, value == "on")
+        if new != old:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "wb") as f:
+                f.write(new.encode("utf-8"))
+    out = parallel_state()
+    out["file"] = path
+    print(json.dumps(out, separators=(",", ":")))
+    return 0
 
 
 def ensure_server(wait_s=60):
@@ -249,3 +292,5 @@ def main(args):
         claude_md_cmd(args.cap, args.dry_run, getattr(args, "five_hour_cap", None))
     elif args.setup_cmd == "open":
         return open_cmd()
+    elif args.setup_cmd == "parallel":
+        return parallel_cmd(getattr(args, "value", None))

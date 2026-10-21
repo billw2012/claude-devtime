@@ -17,6 +17,47 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SHELL_TOOL_RE = re.compile(r"^(Bash|PowerShell)$")
 
 
+FEATURES = ("slots", "agent_budget")  # settings.features.<name> overrides settings.parallel per feature
+_USER_SETTINGS = {}  # user file -> ((mtime_ns, size), [settings])
+
+
+def user_settings():
+    """The [settings] table of the user's devtime.toml ({} if missing or unreadable), cached by the file's mtime: the
+    PreToolUse hook asks on every tool call."""
+    path = os.path.join(paths.USER_CONFIG, "devtime.toml")
+    try:
+        st = os.stat(path)
+    except OSError:
+        return {}
+    stamp = (st.st_mtime_ns, st.st_size)
+    hit = _USER_SETTINGS.get(path)
+    if hit and hit[0] == stamp:
+        return hit[1]
+    try:
+        with open(path, "rb") as handle:
+            settings = tomllib.load(handle).get("settings")
+    except (OSError, ValueError):
+        settings = None
+    settings = settings if isinstance(settings, dict) else {}
+    _USER_SETTINGS[path] = (stamp, settings)
+    return settings
+
+
+def parallel():
+    """settings.parallel: support for several sessions / autonomous pipelines on this PC (default off). It only adds
+    features (the slot queue, the agent budget rules); nothing else depends on it."""
+    return user_settings().get("parallel") is True
+
+
+def feature(name):
+    """Whether a parallel-support feature ("slots", "agent_budget") is on: settings.features.<name> if set (true /
+    false), else settings.parallel."""
+    override = user_settings().get("features")
+    if isinstance(override, dict) and isinstance(override.get(name), bool):
+        return override[name]
+    return parallel()
+
+
 class Rule:
     def __init__(self, spec):
         self.kind = spec["kind"]

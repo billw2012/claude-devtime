@@ -22,6 +22,7 @@ from urllib.parse import parse_qs, urlparse
 
 from . import paths, ports
 
+SCANNED = {"/api/overview", "/api/watch", "/api/tick", "/api/data"}  # endpoints that need the first scan done
 STATIC = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "static")
 
 
@@ -131,11 +132,14 @@ def make_handler(store):
                 data = store.data or {}
                 return self.json({"version": store.version, "generated": data.get("generated"),
                                   "lastScan": store.last_scan, "home": paths.home_id(), "org": paths.ORG,
-                                  "orgName": paths.org_name(paths.ORG) if paths.ORG else None})
+                                  "orgName": paths.org_name(paths.ORG) if paths.ORG else None,
+                                  "scanning": store.data is None})
             if url.path.startswith("/api/"):
                 why = self.refused(query)
                 if why:
                     return self.send(403, json.dumps({"error": why}).encode(), "application/json")
+                if store.data is None and url.path in SCANNED:
+                    return self.send(503, b'{"error":"first scan in progress","scanning":true}', "application/json")
             if url.path == "/api/projects":
                 data = store.slice("*") if store.data else {}
                 return self.json({"version": store.version, "projects": data.get("projects", []),
@@ -200,23 +204,24 @@ def serve(store, host=None, port=None, open_browser=True):
     host = host or s.get("host", "127.0.0.1")
     port = port or ports.choose(store.config.root)  # the configured port, or the next free one if it is not ours
     poll = float(s.get("poll_s", 10))
-    store.log("org %s (%s): first scan of" % (paths.org_name(paths.ORG), paths.ORG), s.get("projects_dir"))
-    store.refresh()
+    # Listen first, scan after: a first scan of a long history can take minutes, and setup / the hooks only find this
+    # server (and the page shows "first scan in progress") once the port answers.
+    httpd = ThreadingHTTPServer((host, port), make_handler(store))
+    ports.record(port)
 
     def loop():
+        store.log("org %s (%s): first scan of" % (paths.org_name(paths.ORG), paths.ORG), s.get("projects_dir"))
         while True:
-            time.sleep(poll)
             try:
                 store.refresh()
             except Exception as error:  # keep serving the last good dataset
                 store.log("refresh failed:", repr(error))
+            time.sleep(poll)
 
     threading.Thread(target=loop, daemon=True).start()
     if not os.environ.get("DEVTIME_NO_SLOT_WATCH"):  # learns slot rules (one watcher machine-wide, by OS lock)
         from . import slotwatch
         threading.Thread(target=slotwatch.run_forever, args=(store.log,), daemon=True, name="slotwatch").start()
-    httpd = ThreadingHTTPServer((host, port), make_handler(store))
-    ports.record(port)
     url = f"http://{host}:{port}/"
     store.log("serving", url)
     if open_browser:

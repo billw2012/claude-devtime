@@ -315,6 +315,20 @@ class Scoping(Fixture):
     def test_version_has_home_and_org(self):
         v = json.loads(self.text("/api/version"))
         self.assertEqual((v["home"], v["org"]), (paths.home_id(), ORG_A))
+        self.assertFalse(v["scanning"])
+
+    def test_before_first_scan(self):
+        data, self.store.data = self.store.data, None
+        try:
+            v = json.loads(self.text("/api/version"))
+            self.assertTrue(v["scanning"])
+            self.assertEqual(v["home"], paths.home_id())  # setup and the hooks find the server while it scans
+            for path in ("/api/overview?range=7d", "/api/tick", "/api/data"):
+                status, body = get(self.base, path)
+                self.assertEqual((status, json.loads(body)["scanning"]), (503, True), path)
+            self.assertEqual(get(self.base, "/")[0], 200)
+        finally:
+            self.store.data = data
 
     def test_nothing_of_another_org_anywhere(self):
         for path in self.PATHS:

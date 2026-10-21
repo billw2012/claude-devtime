@@ -757,6 +757,8 @@ class Watcher:
                 break
             else:
                 continue
+            if str(entry["resource"]).lower() == "none":  # e.g. an interactive editor: nothing to learn
+                continue
             try:
                 r = analyze(pid, procs, self.table, cfg, entry)
             except (OSError, KeyError, ValueError, IndexError) as e:

@@ -321,6 +321,23 @@ class Rules(SlotsBase):
         r = slotrules.hook_check("PowerShell", {"command": "Start-Process fakeheavy.exe -Wait"}, "D:/x", "L")
         self.assertEqual(r[0], "wrap")
 
+    def test_interactive_editor_not_queued(self):
+        ue = "'D:\\UE\\Engine\\Binaries\\Win64\\UnrealEditor.exe'"
+        launch = "$p = Start-Process -FilePath %s -ArgumentList '\"D:\\p\\P.uproject\"', '/P/Maps/M' -PassThru" % ue
+        check = ("$running = Get-CimInstance Win32_Process -Filter \"Name='UnrealEditor.exe'\"; "
+                 "if ($running) { 'running' } else { %s }" % launch)
+        for cmd in (launch, check, "& %s D:/p/P.uproject" % ue):
+            self.assertIsNone(slotrules.hook_check("PowerShell", {"command": cmd}, "D:/x", "L"), cmd)
+        self.assertIsNone(self.match('"C:/UE/UnrealEditor.exe" P.uproject /P/Maps/M &'))
+        # automation runs are still jobs: a detached one is refused, a foreground one queued
+        r = slotrules.hook_check("PowerShell", {"command": launch + ", '-ExecutePythonScript=x.py'"}, "D:/x", "L")
+        self.assertEqual(r[0], "deny")
+        self.assertEqual(self.match('"C:/UE/UnrealEditor.exe" P.uproject -RenderOffscreen -unattended'), "gpu")
+
+    def test_powershell_bare_variable_is_not_run(self):
+        self.assertIsNone(self.match("$x = Get-Process UnrealEditor-Cmd; if ($x) { 'busy' }", "PowerShell"))
+        self.assertEqual(self.match("$ue = 'C:\\UE\\UnrealEditor-Cmd.exe'; & $ue P.uproject", "PowerShell"), "gpu")
+
     def test_hand_rolled_waits(self):
         for cmd in ('until [ -z "$(tasklist | grep -i UnrealEditor-Cmd)" ]; do sleep 30; done',
                     "while pgrep -f blender >/dev/null; do sleep 5; done; ./render.sh",

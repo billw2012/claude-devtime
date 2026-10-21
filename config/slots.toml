@@ -36,6 +36,10 @@ quiet = ["test", "gpu"]  # e.g. timing-sensitive captures or perf tests: nothing
 # cwd = "regex on the session's folder", project = "tag", quiet_if = "regex": a matching command that also matches it
 # needs "quiet" instead). resource = "none" exempts what it matches.
 
+[[rule]]                 # an editor opened to work in (no automation flags): never queued, it stays open for hours
+match = '''UnrealEditor(\.exe)?(?![-\w])(?!.*[\s,]['"]?[-/](run=|(unattended|nullrhi|execcmds|executepythonscript|renderoffscreen|game|server|stdout)(?=[\s=:"']|$)))'''
+resource = "none"
+
 [[rule]]                 # headless editor runs: -nullrhi or a -run= commandlet (no rendering)
 match = '''UnrealEditor(-Cmd)?(\.exe)?\b.*\s-(nullrhi\b|run=)'''
 resource = "test"
@@ -55,6 +59,11 @@ resource = "gpu"
 # Watch list: heavy programs the slot watcher looks for. When one starts unqueued under a Claude Code shell, the
 # watcher finds the project script that started it and learns a rule for that script with this resource
 # (name: regex on the executable's file name; args: optional regex its command line must contain).
+[[watch]]                # an interactive editor (no automation flags): not a job, nothing to learn
+name = '''^UnrealEditor(\.exe)?$'''
+args = '''(?i)^(?!.*[\s,]['"]?[-/](run=|(unattended|nullrhi|execcmds|executepythonscript|renderoffscreen|game|server|stdout)(?=[\s=:"']|$)))'''
+resource = "none"
+
 [[watch]]                # headless editor runs (-nullrhi, -run= commandlets): no rendering
 name = '''^UnrealEditor(-Cmd)?(\.exe)?$'''
 args = '''(?i)\s-(nullrhi\b|run=)'''

@@ -83,6 +83,10 @@ class Learning(Base):
         [r] = self.scan(self.capture(heavy=("UnrealEditor.exe", UE + " P.uproject -game")), dry=True)
         self.assertEqual((r["status"], r["resource"]), ("learn", "gpu"))
 
+    def test_interactive_editor_not_learned(self):
+        t = self.capture("Tools/Dev/open_editor.sh", "", ("UnrealEditor.exe", UE + " P.uproject /P/Maps/M"))
+        self.assertEqual(self.scan(t), [])
+
     def test_learns_script_per_watch_entry(self):
         [r] = self.scan(self.capture())
         self.assertEqual((r["status"], r["script"], r["project"], r["resource"]),

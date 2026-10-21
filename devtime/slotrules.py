@@ -317,19 +317,22 @@ def _base(word):
 def programs(text, ps=False, depth=0):
     """[(candidate text, program length, segment separator, async)]: for each simple command, the program it runs (and
     for interpreters, the script) with the rest of the command after it. A rule matches only at a position < length."""
-    out, variables = [], {}
+    out, variables, prev = [], {}, ""
     for s, e, sep in _segments(text, ps):
         seg = text[s:e]
+        after, prev = prev, sep
         words = _words(seg, ps)
         if not words:
             continue
+        k = 0
         # assignments: NAME=value (bash, alone on the line) and $name = value (PowerShell)
         if len(words) >= 3 and words[1][2] == "=" and words[0][2].startswith("$"):
             m = VARREF.match(words[0][2])
             if m:
                 variables[m.group(1).lower()] = seg[words[2][0]:].strip().strip("'\"")
-            continue
-        k = 0
+            if seg[words[2][0]] in "'\"$@" or re.match(r"^[\d.]+$", words[2][2]):
+                continue
+            k = 2  # $p = Start-Process ...: the right side is a command (it runs, its output is stored)
         while k < len(words) and ASSIGN.match(words[k][2]) and not words[k][2].startswith("-"):
             name, _, value = words[k][2].partition("=")
             variables[name.lower()] = value
@@ -391,7 +394,8 @@ def programs(text, ps=False, depth=0):
             ws, we, value = words[j]
             prog = seg[ws:we]
             m = VARREF.match(value)
-            if m and m.group(1).lower() in variables:
+            # a PowerShell command that is a bare $var only outputs it (if ($x), $x | ...); `& $x` runs it
+            if m and m.group(1).lower() in variables and (j != k or not ps or after == "&"):
                 prog = variables[m.group(1).lower()] + value[m.end():]
             rest = seg[we:]
             cands.append((prog + rest, len(prog), sep, asynchronous))
